@@ -6,10 +6,11 @@
 
 #include "ksat.hh"
 
+using std::swap;
 using std::vector;
 using std::forward_list;
 
-#define CHUNK_SIZE	(uint32_t)((1U << 25 /* 32 MiB */) / sizeof(uint32_t))
+#define CHUNK_SIZE	(uint32_t)((1U << 26 /* 64 MiB */) / sizeof(uint32_t))
 
 clause_db::chunk::chunk(uint32_t sz)
 : size(sz), valid(0), v(new uint32_t[sz])
@@ -82,23 +83,23 @@ clause_proxy ksat::propagate_units(void)
 	unsigned props = 0;
 	struct timeval tv, tw;
 	gettimeofday(&tv, NULL);
-	clause_proxy p = { .ptr = CLAUSE_PTR_NULL };
+	const watch *w = nullptr;
 	//bool p = false;
 	for (; unit_ptr < units.size(); unit_ptr++) {
-		const watch *w = propagate_single(units[unit_ptr].implied_lit);
+		w = propagate_single(units[unit_ptr].implied_lit);
 #if 0
 		fprintf(stderr, "propagation of %ld: %s\n",
 		        lit_to_dimacs(units[unit_ptr]), p ? "conflict" : "OK");
 #endif
-		if (w)
-			return w->this_cl;
 		props++;
+		if (w)
+			break;
 	}
 	gettimeofday(&tw, NULL);
 	long us = (tw.tv_sec-tv.tv_sec)*(long)1e6+(tw.tv_usec-tv.tv_usec);
 	fprintf(stderr, "propagations: %u in %luus (%g props/sec)\n",
 	        props, us, props/(us/1e6));
-	return p;
+	return w ? w->this_cl : clause_proxy{.ptr = CLAUSE_PTR_NULL};
 }
 
 int ksat::run()
@@ -112,7 +113,7 @@ void ksat::init(uint32_t nvars)
 	this->nvars = nvars;
 	vars    = new var_desc[nvars];
 	watches = new vec<watch>[2*nvars];
-	assigns.init(nvars);
+	//assigns.init(nvars);
 	units.reserve(nvars);
 }
 
@@ -122,17 +123,26 @@ const watch * ksat::propagate_single(lit l)
 	vec<watch> &wnl = watches[~l];
 	for (unsigned i=0; i<wnl.size(); i++) {
 		watch &w = wnl[i];
-		assignments::lptr a_implied = assigns[w.implied_lit];
-		if (a_implied.same())
+		lit implied = w.implied_lit;
+		// assignments::lptr a_implied = assigns[w.implied_lit];
+		var_desc &v_implied = vars[var(implied)];
+		if (v_implied.implied & (1U << sign(implied)))
 			continue;
 		if (is_ptr(w.this_cl)) {
-			clause &c = db[w.this_cl.ptr];
-			for (const lit &k : c) {
-				assignments::lptr a_k = assigns[k];
-				/* a_k.same() => k != w.implied_lit && k != ~l */
-				if (k != w.implied_lit && !a_k.other())
-				{
+			clause_ptr cl_ptr = w.this_cl.ptr;
+			clause &c = db[cl_ptr];
+			for (unsigned j=0; j<c.header.size; j++) {
+				lit k = c.l[j];
+				if (vars[var(k)].implied & (1 << sign(k)))
 					/* switch w1 to k */
+					goto done;
+			}
+			for (unsigned j=2; j<c.header.size; j++) {
+				lit k = c.l[j];
+				//assignments::lptr a_k = assigns[k];
+				/* a_k.same() => k != w.implied_lit && k != ~l */
+				if (!(vars[var(k)].implied & (1 << sign(~k)))/*!a_k.other()*/)
+				{
 					/* switch watch from ~l to k */
 				#if 0
 					fprintf(stderr, "switching watch (cl: %u:%u impl:%ld) %ld -> %ld",
@@ -142,11 +152,18 @@ const watch * ksat::propagate_single(lit l)
 					watches[k].push_back(w);
 					w = wnl.back();
 					wnl.pop_back();
+				#if 1
+					unsigned widx = c.l[1] == ~l;
+					assert(c.l[widx] == ~l);
+					// swap(c.l[j], c.l[widx]);
+					c.l[j] = ~l;
+					c.l[widx] = k;
+				#endif
 					i--;
-				#if 0
-					for (watch &v : watches[w.implied_lit])
-						if (w.this_cl == v.this_cl) {
-							fprintf(stderr, " (impl:%ld)", lit_to_dimacs(v.implied_lit));
+				#if 1
+					for (watch &v : watches[implied])
+						if (cl_ptr == v.this_cl.ptr) {
+							// fprintf(stderr, " (impl:%ld)", lit_to_dimacs(v.implied_lit));
 							assert(v.implied_lit == ~l);
 							v.implied_lit = k;
 							break;
@@ -161,12 +178,13 @@ const watch * ksat::propagate_single(lit l)
 		fprintf(stderr, " -> implied %ld, assign have:%d\n",
 		        lit_to_dimacs(w.implied_lit), a_implied.have());
 #endif
-		if (a_implied.have())
+		if (v_implied.implied)
 			return &w;
-		a_implied.set();
 		// fprintf(stderr, " -> enqueuing implied %ld\n", lit_to_dimacs(w.implied_lit));
 		units.emplace_back(w);
-		vars[var(w.implied_lit)].trail_position = units.size()-1;
+		v_implied = var_desc{1U<<sign(implied),(uint32_t)units.size()};
+	//	a_implied.set();
+	//	vars[var(w.implied_lit)].trail_pos_plus1 = units.size();
 	//	vars[var(w.implied_lit)].cause++;
 	//	vars[var(w.implied_lit)].reason = w.this_cl;
 	done:;
@@ -189,7 +207,7 @@ const watch * ksat::propagate_single(lit l)
 
 bool ksat::add_unit(lit l)
 {
-#if 1
+#if 0
 	auto a = assigns[l];
 	// if (a & (1 << sign(l)))
 	if (a.same())
@@ -205,8 +223,8 @@ bool ksat::add_unit(lit l)
 	if ((v.implied |= 1 << sign(l)) == 3)
 		return false;
 #endif
-	vars[var(l)].trail_position = units.size();
 	units.push_back({clause_proxy{.ptr=CLAUSE_PTR_NULL},l});
+	vars[var(l)].trail_pos_plus1 = units.size();
 	return true;
 }
 
@@ -223,6 +241,8 @@ void ksat::add_clause(vector<lit> &c)
 		c[n++] = c[i];
 	}
 	clause_proxy p;
+	unsigned w1 = 0;
+	unsigned w2 = 1;
 	switch (n) {
 	case 1:
 		if (add_unit(c[0]))
@@ -240,14 +260,24 @@ void ksat::add_clause(vector<lit> &c)
 		p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
 		break;
 	default:
+#if 0
+		w1 = rand() % n;
+		w2 = rand() % (n-1);
+		if (w2 >= w1)
+			w2++;
+		{
+			if (w1 > w2)
+				swap(w1, w2);
+			swap(c[0], c[w1]);
+			swap(c[1], c[w2]);
+			w1 = 0;
+			w2 = 1;
+		}
+#endif
 		p.ptr = db.add(n, false);
 		memcpy(db[p.ptr].l, c.data(), n*sizeof(lit));
 		break;
 	}
-	unsigned w1 = rand() % n;
-	unsigned w2 = rand() % (n-1);
-	if (w2 >= w1)
-		w2++;
 	watches[c[w1]].push_back({p, c[w2]});
 	watches[c[w2]].push_back({p, c[w1]});
 }
@@ -292,5 +322,5 @@ void ksat::stats(int verbosity)
 		fprintf(stderr, " %u:%u (%lu MiB)",
 		        ch.valid, ch.size, (ch.size * sizeof(*ch.v)) >> 20);
 	fprintf(stderr, "\n");
-	fprintf(stderr, "%zu units to be propagated\n", units.size());
+	fprintf(stderr, "%zu units to be propagated, unsat: %d\n", units.size(), unsat);
 }

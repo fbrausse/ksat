@@ -54,6 +54,9 @@ struct clause {
 	const lit * cend()   const { return l + header.size; }
 };
 
+/* a clause_ptr has the same size as two literals, so in case of binary clauses,
+ * which are stored solely in the watch list, use the pointer itself to store
+ * the literals of the binary clause. */
 union clause_proxy {
 	uint32_t l[2];
 	clause_ptr ptr;
@@ -69,16 +72,6 @@ static inline bool is_ptr(const clause_proxy &p)
 }
 
 inline clause_proxy::operator bool() const { return !is_ptr(*this) || ptr; }
-
-#if 1
-#else
-inline clause_proxy make_proxy(lit l, const watch &w)
-{
-	return w.this_cl ? clause_proxy{.ptr = w.this_cl}
-	                 : clause_proxy{.l={l | CLAUSE_PROXY_BIN_MASK,
-	                                    w.implied_lit | CLAUSE_PROXY_BIN_MASK}};
-}
-#endif
 
 struct watch {
 	clause_proxy this_cl;
@@ -193,16 +186,19 @@ class ksat {
 	//	var_desc() : implied(0) {}
 	//	clause_proxy reason;
 	//	uint32_t decision_level;
-	//	uint32_t implied : 2;
-		uint32_t trail_position;
+		uint32_t implied : 2;
+		uint32_t trail_pos_plus1 : LOG_NUM_VARS;
+
+		var_desc(uint32_t implied=0, uint32_t trail_pos_plus1=0)
+		: implied(implied), trail_pos_plus1(trail_pos_plus1) {}
 	};
 
 	clause_db db;
 
 	var_desc *vars;
-	assignments assigns;     // assignment per variable
+//	assignments assigns;     // assignment per variable
 	vec<watch> *watches;     // watch lists
-	std::vector<watch> units;  // trail
+	std::vector<watch> units;  // trail, including reasons
 	uint32_t unit_ptr = 0;   // current position in trail
 
 	uint32_t nvars;          // constant number of instance variables
@@ -228,7 +224,7 @@ class ksat {
 			for (; pos() < 2*sat.nvars; ++pos(), pos_idx=0)
 				for (; pos_idx < sat.watches[pos()].size(); pos_idx++) {
 					watch &w = sat.watches[pos()][pos_idx];
-					if (w.this_cl && pos() < w.implied_lit) {
+					if (!is_ptr(w.this_cl) && pos() < w.implied_lit) {
 						tmp_cl[2] = w.implied_lit;
 						return;
 					}
@@ -273,7 +269,7 @@ public:
 
 	uint32_t num_vars() const { return nvars; }
 
-	unsigned get_assign(uint32_t v) const { return assigns[v]; }
+	unsigned get_assign(uint32_t v) const { return vars[v].implied; }
 
 	typename decltype(units)::const_iterator units_begin() const { return units.begin(); }
 	typename decltype(units)::const_iterator units_end()   const { return units.end(); }

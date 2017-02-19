@@ -62,7 +62,7 @@ static int read_dimacs(ksat &solver, FILE *in)
 				long v = strtol(tok, &endptr, 10);
 				if (*endptr)
 					goto error_line;
-				if ((unsigned long)abs(v) > nv) {
+				if ((unsigned long)std::abs(v) > nv) {
 					fprintf(stderr,
 					        "error: invalid literal '%s' "
 					        "in clause on input line %u: "
@@ -112,7 +112,7 @@ static void do_dump(const ksat &solver, FILE *f)
 	unsigned long n = 0;
 	for (const auto &c : solver.clauses())
 		for (lit l : c) {
-			if (solver.get_assign(var(l)) == 1U << sign(l))
+			if (solver.get_assign(var(l)) & (1U << sign(l)))
 				break;
 			if (solver.get_assign(var(l)))
 				continue;
@@ -129,7 +129,7 @@ static void do_dump(const ksat &solver, FILE *f)
 	for (const auto &c : solver.clauses()) {
 		cl.clear();
 		for (lit l : c) {
-			if (solver.get_assign(var(l)) == 1U << sign(l))
+			if (solver.get_assign(var(l)) & (1U << sign(l)))
 				goto next;
 			if (solver.get_assign(var(l)))
 				continue;
