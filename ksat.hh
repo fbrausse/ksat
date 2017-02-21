@@ -202,9 +202,15 @@ class ksat {
 //	assignments assigns;     // assignment per variable
 	vec<watch> *watches;     // watch lists
 	std::vector<watch> units;  // trail, including reasons (if implied)
+	std::vector<uint32_t> decisions; // indices of trail which start a new decision level
 	uint32_t unit_ptr = 0;   // current position in trail
 
 	uint32_t nvars;          // constant number of instance variables
+
+	lit next_decision();
+	uint32_t analyze(const watch *w, std::vector<lit> &cl);
+	void add_clause0(std::vector<lit> &);
+	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l);
 

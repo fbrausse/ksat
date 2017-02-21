@@ -97,9 +97,88 @@ const watch * ksat::propagate_units(void)
 	return w;
 }
 
+lit ksat::next_decision()
+{
+	for (uint32_t v=0; v<nvars; v++)
+		if (!vars[v].have())
+			return {2*v+!vars[v].value};
+	return {2*nvars};
+}
+
+void ksat::trackback(uint32_t dlevel)
+{
+	for (uint32_t i=decisions[dlevel]; i<units.size(); i++)
+		vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
+	units.resize(decisions[dlevel]);
+	decisions.resize(dlevel);
+	unit_ptr = units.size();
+}
+
+uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
+{
+#if 0
+	const watch *w2 = &units[vars[var(w->implied_lit)].trail_pos_plus1-1];
+	resolve(w, w2, cl);
+#else
+	for (uint32_t i : decisions)
+		cl.push_back(~units[i].implied_lit);
+	return decisions.size()-1;
+#endif
+}
+
+void ksat::add_clause0(vector<lit> &cl)
+{
+	clause_proxy p;
+	unsigned j=0;
+	for (unsigned i=0; j<2 && i<cl.size(); i++)
+		if (!vars[var(cl[i])].have())
+			swap(cl[j++], cl[i]);
+	switch (cl.size()) {
+	case 1:
+		if (add_unit(cl[0]))
+			return;
+		/* fall through */
+	case 0:
+		unsat = true;
+		return;
+	case 2:
+		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
+		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
+		break;
+	default:
+		p.ptr = db.add(cl.size(), true);
+		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
+		break;
+	}
+	watches[cl[0]].push_back({p,cl[1]});
+	watches[cl[1]].push_back({p,cl[0]});
+	if (j == 1 && cl.size() > 1) {
+		bool ok = add_unit(cl[0]);
+		assert(ok);
+	}
+}
+
 int ksat::run()
 {
 	unsat |= (bool)propagate_units();
+
+	vector<lit> cl;
+	for (lit d; !unsat && var(d = next_decision()) < nvars;) {
+		decisions.push_back(units.size());
+		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
+		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
+		const watch *w;
+		while (unit_ptr < units.size() && (w = propagate_units())) {
+			if (!decisions.size()) {
+				unsat = true;
+				break;
+			}
+			uint32_t decision_level = analyze(w, cl);
+			trackback(decision_level);
+			add_clause0(cl);
+			cl.clear();
+		}
+	}
 	return 0;
 }
 
