@@ -43,7 +43,7 @@ struct clause {
 		uint32_t size : LOG_NUM_VARS;
 		uint32_t learnt : 1;
 	} header;
-	lit l[];
+	lit l[]; /* first two are watched */
 
 	lit * begin() { return l; }
 	lit * end()   { return l + header.size; }
@@ -186,11 +186,14 @@ class ksat {
 	//	var_desc() : implied(0) {}
 	//	clause_proxy reason;
 	//	uint32_t decision_level;
-		uint32_t implied : 2;
+		uint32_t value : 1;
 		uint32_t trail_pos_plus1 : LOG_NUM_VARS;
 
-		var_desc(uint32_t implied=0, uint32_t trail_pos_plus1=0)
-		: implied(implied), trail_pos_plus1(trail_pos_plus1) {}
+		var_desc(bool value=false, uint32_t trail_pos_plus1=0)
+		: value(value), trail_pos_plus1(trail_pos_plus1) {}
+
+		bool have() const { return trail_pos_plus1 > 0; }
+		// bool assigned(bool phase) const { return value == phase; }
 	};
 
 	clause_db db;
@@ -198,7 +201,7 @@ class ksat {
 	var_desc *vars;
 //	assignments assigns;     // assignment per variable
 	vec<watch> *watches;     // watch lists
-	std::vector<watch> units;  // trail, including reasons
+	std::vector<watch> units;  // trail, including reasons (if implied)
 	uint32_t unit_ptr = 0;   // current position in trail
 
 	uint32_t nvars;          // constant number of instance variables
@@ -249,9 +252,7 @@ class ksat {
 	};
 
 	const watch * propagate_single(lit l);
-	clause_proxy propagate_units(void);
-
-	void handle_conflict(lit unit, clause_ptr c);
+	const watch * propagate_units(void);
 
 public:
 	ksat(const ksat &) = delete;
@@ -269,7 +270,7 @@ public:
 
 	uint32_t num_vars() const { return nvars; }
 
-	unsigned get_assign(uint32_t v) const { return vars[v].implied; }
+	unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
 
 	typename decltype(units)::const_iterator units_begin() const { return units.begin(); }
 	typename decltype(units)::const_iterator units_end()   const { return units.end(); }

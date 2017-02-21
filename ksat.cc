@@ -72,12 +72,7 @@ ksat::~ksat()
 
 #include <sys/time.h>
 
-void handle_conflict(lit unit, clause_ptr c)
-{
-	
-}
-
-clause_proxy ksat::propagate_units(void)
+const watch * ksat::propagate_units(void)
 {
 	fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
 	unsigned props = 0;
@@ -99,7 +94,7 @@ clause_proxy ksat::propagate_units(void)
 	long us = (tw.tv_sec-tv.tv_sec)*(long)1e6+(tw.tv_usec-tv.tv_usec);
 	fprintf(stderr, "propagations: %u in %luus (%g props/sec)\n",
 	        props, us, props/(us/1e6));
-	return w ? w->this_cl : clause_proxy{.ptr = CLAUSE_PTR_NULL};
+	return w;
 }
 
 int ksat::run()
@@ -126,22 +121,55 @@ const watch * ksat::propagate_single(lit l)
 		lit implied = w.implied_lit;
 		// assignments::lptr a_implied = assigns[w.implied_lit];
 		var_desc &v_implied = vars[var(implied)];
-		if (v_implied.implied & (1U << sign(implied)))
+		if (v_implied.have() && v_implied.value == sign(implied))
 			continue;
 		if (is_ptr(w.this_cl)) {
 			clause_ptr cl_ptr = w.this_cl.ptr;
 			clause &c = db[cl_ptr];
-			for (unsigned j=0; j<c.header.size; j++) {
+		#if 1
+			unsigned j_true = 0, j_undef = 0;
+			for (unsigned j=2; j<c.header.size && !j_true; j++) {
 				lit k = c.l[j];
-				if (vars[var(k)].implied & (1 << sign(k)))
-					/* switch w1 to k */
-					goto done;
+				const var_desc &vk = vars[var(k)];
+				if (vk.have()) {
+					if (vk.value == sign(k))
+						j_true = j;
+				} else //if (!j_undef)
+					j_undef = j; // take last undef'ed lit
 			}
+			if (j_true || j_undef) {
+				unsigned j = j_true ? j_true : j_undef;
+				lit k = c.l[j];
+
+				watches[k].push_back(w);
+				w = wnl.back();
+				wnl.pop_back();
+
+				unsigned widx = c.l[1] == ~l;
+				assert(c.l[widx] == ~l);
+				// swap(c.l[j], c.l[widx]);
+				c.l[j] = ~l;
+				c.l[widx] = k;
+
+				i--;
+
+				for (watch &v : watches[implied])
+					if (cl_ptr == v.this_cl.ptr) {
+						// fprintf(stderr, " (impl:%ld)", lit_to_dimacs(v.implied_lit));
+						assert(v.implied_lit == ~l);
+						v.implied_lit = k;
+						break;
+					}
+
+				goto done;
+			}
+		#else
 			for (unsigned j=2; j<c.header.size; j++) {
 				lit k = c.l[j];
 				//assignments::lptr a_k = assigns[k];
 				/* a_k.same() => k != w.implied_lit && k != ~l */
-				if (!(vars[var(k)].implied & (1 << sign(~k)))/*!a_k.other()*/)
+				//if (!(vars[var(k)].implied & (1 << sign(~k)))/*!a_k.other()*/)
+				if (!vars[var(k)].have() || vars[var(k)].value == sign(k))
 				{
 					/* switch watch from ~l to k */
 				#if 0
@@ -173,16 +201,17 @@ const watch * ksat::propagate_single(lit l)
 					goto done;
 				}
 			}
+		#endif
 		}
 #if 0
 		fprintf(stderr, " -> implied %ld, assign have:%d\n",
 		        lit_to_dimacs(w.implied_lit), a_implied.have());
 #endif
-		if (v_implied.implied)
+		if (v_implied.have())
 			return &w;
 		// fprintf(stderr, " -> enqueuing implied %ld\n", lit_to_dimacs(w.implied_lit));
 		units.emplace_back(w);
-		v_implied = var_desc{1U<<sign(implied),(uint32_t)units.size()};
+		v_implied = var_desc{sign(implied),(uint32_t)units.size()};
 	//	a_implied.set();
 	//	vars[var(w.implied_lit)].trail_pos_plus1 = units.size();
 	//	vars[var(w.implied_lit)].cause++;
@@ -218,13 +247,13 @@ bool ksat::add_unit(lit l)
 	a.set();
 #else
 	auto &v = vars[var(l)];
-	if (v.implied & (1 << sign(l)))
+	if (v.have() && v.value == sign(l))
 		return true;
-	if ((v.implied |= 1 << sign(l)) == 3)
+	if (v.have())
 		return false;
 #endif
 	units.push_back({clause_proxy{.ptr=CLAUSE_PTR_NULL},l});
-	vars[var(l)].trail_pos_plus1 = units.size();
+	v = var_desc{sign(l),(uint32_t)units.size()};
 	return true;
 }
 
@@ -322,5 +351,19 @@ void ksat::stats(int verbosity)
 		fprintf(stderr, " %u:%u (%lu MiB)",
 		        ch.valid, ch.size, (ch.size * sizeof(*ch.v)) >> 20);
 	fprintf(stderr, "\n");
+	size_t n_bin = 0, n_lg = 0;
+	std::vector<uint32_t> lg_sz;
+	for (auto it = binary_clauses_begin(); it != binary_clauses_end(); ++it)
+		n_bin++;
+	for (auto it = large_clauses_begin(); it != large_clauses_end(); ++it) {
+		lg_sz.resize(std::max((uint32_t)lg_sz.size(), it->header.size+1U));
+		lg_sz[it->header.size]++;
+		n_lg++;
+	}
+	fprintf(stderr, "%u vars; %zu binary, %zu large clauses:\n", nvars, n_bin, n_lg);
+	if (verbosity > 1)
+		for (uint32_t i=0; i<lg_sz.size(); i++)
+			if (lg_sz[i])
+				fprintf(stderr, "\t%u: %u\n", i, lg_sz[i]);
 	fprintf(stderr, "%zu units to be propagated, unsat: %d\n", units.size(), unsat);
 }
