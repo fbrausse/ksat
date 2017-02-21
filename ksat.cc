@@ -105,7 +105,7 @@ lit ksat::next_decision()
 	return {2*nvars};
 }
 
-void ksat::trackback(uint32_t dlevel)
+void ksat::trackback(uint32_t dlevel) // to including dlevel
 {
 	for (uint32_t i=decisions[dlevel]; i<units.size(); i++)
 		vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
@@ -114,25 +114,123 @@ void ksat::trackback(uint32_t dlevel)
 	unit_ptr = units.size();
 }
 
+uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl)
+{
+	const watch *w = &units[vars[var(l)].trail_pos_plus1-1];
+	assert(l == ~w->implied_lit);
+	const lit *lqs, *lqe;
+	lit clq[2];
+	deref(w->this_cl, clq, &lqs, &lqe);
+#if 1
+	fprintf(stderr, "resolve1:");
+	for (lit k : v)
+		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "resolve2:");
+	for (unsigned i=0; lqs+i<lqe; i++)
+		fprintf(stderr, " %ld[%u]", lit_to_dimacs(lqs[i]), vars[var(lqs[i])].trail_pos_plus1-1);
+	fprintf(stderr, "\n");
+#endif
+	assert(!v.empty());
+	assert(lqs < lqe);
+	unsigned m = lqe-lqs-1 + v.size()-1;
+	cl.resize(lqe-lqs-1 + v.size()-1);
+	unsigned j=0;
+	for (lit k : v)
+		if (k != l)
+			cl[j++] = k;
+	for (; lqs < lqe; lqs++)
+		if (*lqs != ~l)
+			cl[j++] = *lqs;
+	// cl.resize(j);
+	assert(m == j);
+	sort(cl.begin(), cl.begin()+m, [this](lit a, lit b){
+		return vars[var(a)].trail_pos_plus1 < vars[var(b)].trail_pos_plus1;
+	});
+	assert(m > 0);
+	unsigned n_this_dl = 0;
+	uint32_t max_tp = 0;
+	uint32_t most_recent_this_dl = 0;
+	j = cl.size() != 0;
+	for (unsigned i=0; i<m; i++) {
+		lit k = cl[i];
+		if (i > 0) {
+			uint32_t x = cl[j-1] ^ k;
+			if (!x) continue;
+			if (x == 1) {
+				fprintf(stderr, "tautology\n");
+				cl.clear();
+				return decisions.size()-1;
+			}
+			cl[j++] = k;
+		}
+		uint32_t tp = vars[var(k)].trail_pos_plus1-1;
+		if (tp >= decisions.back()) {
+			if (!n_this_dl++ || most_recent_this_dl < tp)
+				most_recent_this_dl = tp;
+		} else if (max_tp < tp)
+			max_tp = tp;
+	}
+	cl.resize(j);
+#if 1
+	fprintf(stderr, "resolved to");
+	for (lit k : cl)
+		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "dl: %zu[%u], on this dl: %u, max_tp not on this dl: %u, most recent on this dl: %u, j: %u\n",
+	        decisions.size()-1, decisions.back(), n_this_dl, max_tp, most_recent_this_dl, j);
+#endif
+	if (n_this_dl <= 1) {
+		unsigned dec;
+		for (dec=decisions.size(); dec>0; dec--)
+			if (max_tp >= decisions[dec-1])
+				break;
+		return dec;
+	} else {
+		// resolve cl with the reason for the most recently implied (false) literal in cl
+		swap(v, cl);
+		return resolve_conflict(v, ~units[most_recent_this_dl].implied_lit, cl);
+	}
+}
+
 uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
 {
-#if 0
-	const watch *w2 = &units[vars[var(w->implied_lit)].trail_pos_plus1-1];
-	resolve(w, w2, cl);
-#else
-	for (uint32_t i : decisions)
-		cl.push_back(~units[i].implied_lit);
-	return decisions.size()-1;
-#endif
+	lit clp[2];
+	const lit *a, *b;
+	deref(w->this_cl, clp, &a, &b);
+	vector<lit> v(a, b);
+	uint32_t dec = resolve_conflict(v, w->implied_lit, cl);
+	fprintf(stderr, "resolution done, resulted in clause of size %zu\n", cl.size());
+
+	if (cl.empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
+		for (uint32_t i : decisions)
+			cl.push_back(~units[i].implied_lit);
+		return decisions.size()-1;
+	} else {
+		return dec;
+	}
 }
 
 void ksat::add_clause0(vector<lit> &cl)
 {
 	clause_proxy p;
 	unsigned j=0;
+	bool sat = false;
 	for (unsigned i=0; j<2 && i<cl.size(); i++)
 		if (!vars[var(cl[i])].have())
 			swap(cl[j++], cl[i]);
+		else
+			sat |= vars[var(cl[i])].value == sign(cl[i]);
+	assert(j <= 1);
+	assert(!sat);
+	assert(cl.size() >= 2);
+	/* 0 and especially 1 must be those assigned latest!!! */
+	unsigned w = 1;
+	for (unsigned k=2; k<cl.size(); k++)
+		if (vars[var(cl[k])].trail_pos_plus1 >
+		    vars[var(cl[w])].trail_pos_plus1)
+			w = k;
+	swap(cl[1], cl[w]);
 	switch (cl.size()) {
 	case 1:
 		if (add_unit(cl[0]))
@@ -147,22 +245,47 @@ void ksat::add_clause0(vector<lit> &cl)
 		break;
 	default:
 		p.ptr = db.add(cl.size(), true);
+		if (p.ptr.offset == 145188) {
+			//abort();
+		}
 		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
 		break;
 	}
 	watches[cl[0]].push_back({p,cl[1]});
 	watches[cl[1]].push_back({p,cl[0]});
 	if (j == 1 && cl.size() > 1) {
-		bool ok = add_unit(cl[0]);
+		bool ok = add_unit(cl[0], p);
 		assert(ok);
 	}
 }
 
 int ksat::run()
 {
+	vector<lit> cl;
+	while (1) {
+		while (const watch *w = propagate_units()) {
+			if (decisions.empty()) {
+				unsat = true;
+				return 20;
+			}
+			uint32_t decision_level = analyze(w, cl);
+			trackback(decision_level);
+			add_clause0(cl);
+		}
+		lit d = next_decision();
+		if (var(d) >= nvars)
+			return 10;
+		decisions.push_back(units.size());
+		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
+		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
+	}
+	return 0;
+
+
+
+
 	unsat |= (bool)propagate_units();
 
-	vector<lit> cl;
 	for (lit d; !unsat && var(d = next_decision()) < nvars;) {
 		decisions.push_back(units.size());
 		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
@@ -260,7 +383,7 @@ const watch * ksat::propagate_single(lit l)
 	return nullptr;
 }
 
-bool ksat::add_unit(lit l)
+bool ksat::add_unit(lit l, const clause_proxy &p)
 {
 #if 0
 	auto a = assigns[l];
@@ -278,7 +401,7 @@ bool ksat::add_unit(lit l)
 	if (v.have())
 		return false;
 #endif
-	units.push_back({clause_proxy{.ptr=CLAUSE_PTR_NULL},l});
+	units.push_back({p,l});
 	v = var_desc{sign(l),(uint32_t)units.size()};
 	return true;
 }
@@ -295,46 +418,46 @@ void ksat::add_clause(vector<lit> &c)
 			return; /* dismiss clause, always satisfied */
 		c[n++] = c[i];
 	}
-	clause_proxy p;
-	unsigned w1 = 0;
-	unsigned w2 = 1;
-	switch (n) {
-	case 1:
-		if (add_unit(c[0]))
-			return;
-		/* fall through */
-	case 0:
-		fprintf(stderr, "init unsat (n: %u):", n);
-		for (lit l : c)
-			fprintf(stderr, " %ld", lit_to_dimacs(l));
-		fprintf(stderr, "\n");
-		unsat = true;
-		return;
-	case 2:
-		p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
-		p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
-		break;
-	default:
+	c.resize(n);
+	unsigned j=0;
+	bool sat = false;
+	for (unsigned i=0; !sat && j<2 && i<c.size(); i++)
+		if (!vars[var(c[i])].have())
+			swap(c[j++], c[i]);
+		else
+			sat |= vars[var(c[i])].value == sign(c[i]);
+	if (c.size() >= 2) {
+		clause_proxy p;
+		if (c.size() == 2) {
+			p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
+			p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
+		} else {
 #if 0
-		w1 = rand() % n;
-		w2 = rand() % (n-1);
-		if (w2 >= w1)
-			w2++;
-		{
+			unsigned w1 = rand() % n;
+			unsigned w2 = rand() % (n-1);
+			if (w2 >= w1)
+				w2++;
 			if (w1 > w2)
 				swap(w1, w2);
 			swap(c[0], c[w1]);
 			swap(c[1], c[w2]);
-			w1 = 0;
-			w2 = 1;
-		}
 #endif
-		p.ptr = db.add(n, false);
-		memcpy(db[p.ptr].l, c.data(), n*sizeof(lit));
-		break;
+			p.ptr = db.add(n, false);
+			memcpy(db[p.ptr].l, c.data(), n*sizeof(lit));
+		}
+		watches[c[0]].push_back({p, c[1]});
+		watches[c[1]].push_back({p, c[0]});
 	}
-	watches[c[w1]].push_back({p, c[w2]});
-	watches[c[w2]].push_back({p, c[w1]});
+	if (!sat)
+		switch (j) {
+		case 1:
+			if (add_unit(c[0]))
+				return;
+			/* fall through */
+		case 0:
+			unsat = true;
+			return;
+		}
 }
 
 void ksat::stats(int verbosity)

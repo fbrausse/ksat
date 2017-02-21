@@ -204,9 +204,24 @@ class ksat {
 	lit next_decision();
 	uint32_t analyze(const watch *w, std::vector<lit> &cl);
 	void add_clause0(std::vector<lit> &);
+	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl);
 	void trackback(uint32_t dlevel);
 
-	bool add_unit(lit l);
+	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
+
+	void deref(const clause_proxy &p, lit *tmp, const lit **start, const lit **end) const
+	{
+		if (is_ptr(p)) {
+			const clause &cp = db[p.ptr];
+			*start = cp.begin();
+			*end = cp.end();
+		} else {
+			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
+			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
+			*start = tmp;
+			*end = tmp+2;
+		}
+	}
 
 	struct bin_cl_itr {
 
