@@ -181,11 +181,6 @@ struct assignments {
 class ksat {
 
 	struct var_desc {
-	//	uint32_t implied : 2;
-	//	uint32_t assigned_level : LOG_NUM_VARS;
-	//	var_desc() : implied(0) {}
-	//	clause_proxy reason;
-	//	uint32_t decision_level;
 		uint32_t value : 1;
 		uint32_t trail_pos_plus1 : LOG_NUM_VARS;
 
@@ -193,7 +188,6 @@ class ksat {
 		: value(value), trail_pos_plus1(trail_pos_plus1) {}
 
 		bool have() const { return trail_pos_plus1 > 0; }
-		// bool assigned(bool phase) const { return value == phase; }
 	};
 
 	clause_db db;

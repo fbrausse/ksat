@@ -193,19 +193,16 @@ void ksat::init(uint32_t nvars)
 
 const watch * ksat::propagate_single(lit l)
 {
-//	fprintf(stderr, "propagating %ld\n", lit_to_dimacs(l));
 	vec<watch> &wnl = watches[~l];
 	for (unsigned i=0; i<wnl.size(); i++) {
 		watch &w = wnl[i];
 		lit implied = w.implied_lit;
-		// assignments::lptr a_implied = assigns[w.implied_lit];
 		var_desc &v_implied = vars[var(implied)];
 		if (v_implied.have() && v_implied.value == sign(implied))
 			continue;
 		if (is_ptr(w.this_cl)) {
 			clause_ptr cl_ptr = w.this_cl.ptr;
 			clause &c = db[cl_ptr];
-		#if 1
 			unsigned j_true = 0, j_undef = 0;
 			for (unsigned j=2; j<c.header.size && !j_true; j++) {
 				lit k = c.l[j];
@@ -226,7 +223,6 @@ const watch * ksat::propagate_single(lit l)
 
 				unsigned widx = c.l[1] == ~l;
 				assert(c.l[widx] == ~l);
-				// swap(c.l[j], c.l[widx]);
 				c.l[j] = ~l;
 				c.l[widx] = k;
 
@@ -234,7 +230,6 @@ const watch * ksat::propagate_single(lit l)
 
 				for (watch &v : watches[implied])
 					if (cl_ptr == v.this_cl.ptr) {
-						// fprintf(stderr, " (impl:%ld)", lit_to_dimacs(v.implied_lit));
 						assert(v.implied_lit == ~l);
 						v.implied_lit = k;
 						break;
@@ -242,59 +237,11 @@ const watch * ksat::propagate_single(lit l)
 
 				goto done;
 			}
-		#else
-			for (unsigned j=2; j<c.header.size; j++) {
-				lit k = c.l[j];
-				//assignments::lptr a_k = assigns[k];
-				/* a_k.same() => k != w.implied_lit && k != ~l */
-				//if (!(vars[var(k)].implied & (1 << sign(~k)))/*!a_k.other()*/)
-				if (!vars[var(k)].have() || vars[var(k)].value == sign(k))
-				{
-					/* switch watch from ~l to k */
-				#if 0
-					fprintf(stderr, "switching watch (cl: %u:%u impl:%ld) %ld -> %ld",
-						w.this_cl.chunk_idx, w.this_cl.offset,
-						lit_to_dimacs(w.implied_lit), lit_to_dimacs(~l), lit_to_dimacs(k));
-				#endif
-					watches[k].push_back(w);
-					w = wnl.back();
-					wnl.pop_back();
-				#if 1
-					unsigned widx = c.l[1] == ~l;
-					assert(c.l[widx] == ~l);
-					// swap(c.l[j], c.l[widx]);
-					c.l[j] = ~l;
-					c.l[widx] = k;
-				#endif
-					i--;
-				#if 1
-					for (watch &v : watches[implied])
-						if (cl_ptr == v.this_cl.ptr) {
-							// fprintf(stderr, " (impl:%ld)", lit_to_dimacs(v.implied_lit));
-							assert(v.implied_lit == ~l);
-							v.implied_lit = k;
-							break;
-						}
-				#endif
-					//fprintf(stderr, "\n");
-					goto done;
-				}
-			}
-		#endif
 		}
-#if 0
-		fprintf(stderr, " -> implied %ld, assign have:%d\n",
-		        lit_to_dimacs(w.implied_lit), a_implied.have());
-#endif
 		if (v_implied.have())
 			return &w;
-		// fprintf(stderr, " -> enqueuing implied %ld\n", lit_to_dimacs(w.implied_lit));
 		units.emplace_back(w);
 		v_implied = var_desc{sign(implied),(uint32_t)units.size()};
-	//	a_implied.set();
-	//	vars[var(w.implied_lit)].trail_pos_plus1 = units.size();
-	//	vars[var(w.implied_lit)].cause++;
-	//	vars[var(w.implied_lit)].reason = w.this_cl;
 	done:;
 	/*
 		if (clause satisfied through w2)
