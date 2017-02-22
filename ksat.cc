@@ -287,11 +287,17 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 		sort(vv.begin(), vv.end(), lt);
 		vv.erase(unique(vv.begin(), vv.end()), vv.end());
 	};
+	auto lit2tp = [tp1](lit l){ return lit{tp1(l) << 1 | sign(l)}; };
+	auto tp2lit = [this](lit l){ return lit{var(units[var(l)-1].implied_lit)<<1 | sign(l)}; };
 	lit l = w->implied_lit;
 	vector<lit> v[2];
-	for (; a < b; a++)
-		v[td(*a)].push_back(*a);
-	sort(v[1].begin(), v[1].end(), lt);
+	for (; a < b; a++) {
+		if (td(*a))
+			v[1].push_back(lit2tp(*a));
+		else
+			v[0].push_back(*a);
+	}
+	sort(v[1].begin(), v[1].end());
 	while (v[1].size() > 1) {
 		if (v[1].size() <= 1)
 			break;
@@ -299,13 +305,12 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 		fprintf(stderr, "resolve1:");
 		for (int i=1; i>=0; i--)
 			for (lit k : v[i])
-				fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
 		fprintf(stderr, "\n");
 #endif
-		l = v[1].front();
-		v[1][0] = v[1].back();
+		l = v[1].back();
 		v[1].pop_back();
-		deref(units[vars[var(l)].trail_pos_plus1-1].this_cl, clp, &a, &b);
+		deref(units[var(l)-1].this_cl, clp, &a, &b);
 #if 0
 		fprintf(stderr, "resolve2:");
 		for (unsigned i=0; a+i<b; i++)
@@ -313,10 +318,14 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 		fprintf(stderr, "\n");
 #endif
 		for (; a < b; a++)
-			if (*a != ~l)
-				v[td(*a)].push_back(*a);
+			if (td(*a)) {
+				if (lit2tp(*a) != ~l)
+					v[1].push_back(lit2tp(*a));
+			} else
+				v[0].push_back(*a);
 		#if 1
-		s(v[1]);
+		sort(v[1].begin(), v[1].end());
+		v[1].erase(unique(v[1].begin(), v[1].end()), v[1].end());
 		#else
 		for (auto &vv : v) {
 			sort(vv.begin(), vv.end(), [tp1](lit a, lit b){ return tp1(a) > tp1(b); });
@@ -327,7 +336,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 		fprintf(stderr, "resolved to");
 		for (int i=1; i>=0; i--)
 			for (lit k : v[i])
-				fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
 		fprintf(stderr, "\n");
 #endif
 		m.tick();
@@ -335,7 +344,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 	s(v[0]);
 	assert(v[1].size() == 1);
 	cl.clear();
-	cl.push_back(v[1][0]);
+	cl.push_back(tp2lit(v[1][0]));
 	uint32_t max_tp1 = 0;
 	for (lit k : v[0]) {
 		cl.push_back(k);
