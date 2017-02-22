@@ -202,10 +202,10 @@ class ksat {
 
 	uint32_t nvars;          // constant number of instance variables
 
-	lit next_decision();
-	uint32_t analyze(const watch *w, std::vector<lit> &cl, unsigned long *);
+	lit next_decision() const;
+	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *) const;
 	void add_clause0(std::vector<lit> &);
-	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *);
+	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *) const;
 	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});

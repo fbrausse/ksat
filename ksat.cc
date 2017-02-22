@@ -126,7 +126,7 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 	return w;
 }
 
-lit ksat::next_decision()
+lit ksat::next_decision() const
 {
 	for (uint32_t v=0; v<nvars; v++)
 		if (!vars[v].have())
@@ -145,7 +145,7 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	unit_ptr = units.size();
 }
 
-uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *steps)
+uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *steps) const
 {
 	const watch *w = &units[vars[var(l)].trail_pos_plus1-1];
 	assert(l == ~w->implied_lit);
@@ -270,7 +270,7 @@ static void build_bin_heap(V &v, const Le &le, uint32_t s=0)
 		heapify(v, i-1, le);
 }
 
-uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutions)
+uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resolutions, unsigned long *rt) const
 {
 	uint32_t dec;
 #if 1
@@ -282,25 +282,21 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 #if 1
 	auto tp1 = [this](lit l){ return vars[var(l)].trail_pos_plus1; };
 	auto td = [tp1,k=decisions.back()](lit l){ return tp1(l) > k; };
-	auto lt = [tp1](lit a, lit b){ return tp1(a) > tp1(b); };
-	auto s = [lt](vector<lit> &vv) {
-		sort(vv.begin(), vv.end(), lt);
-		vv.erase(unique(vv.begin(), vv.end()), vv.end());
-	};
+	auto gt = [tp1](lit a, lit b){ return tp1(a) > tp1(b); };
 	auto lit2tp = [tp1](lit l){ return lit{tp1(l) << 1 | sign(l)}; };
 	auto tp2lit = [this](lit l){ return lit{var(units[var(l)-1].implied_lit)<<1 | sign(l)}; };
 	lit l = w->implied_lit;
-	vector<lit> v[2];
+	v[0].clear();
+	v[1].clear();
+	v[1].reserve(b-a);
 	for (; a < b; a++) {
 		if (td(*a))
 			v[1].push_back(lit2tp(*a));
 		else
 			v[0].push_back(*a);
 	}
-	sort(v[1].begin(), v[1].end());
+	sort(v[1].begin(), v[1].end()); /* tp1 descending */
 	while (v[1].size() > 1) {
-		if (v[1].size() <= 1)
-			break;
 #if 0
 		fprintf(stderr, "resolve1:");
 		for (int i=1; i>=0; i--)
@@ -312,26 +308,20 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 		v[1].pop_back();
 		deref(units[var(l)-1].this_cl, clp, &a, &b);
 #if 0
-		fprintf(stderr, "resolve2:");
+		fprintf(stderr, "dl %zu:%u resolve2:", decisions.size(), decisions.back());
 		for (unsigned i=0; a+i<b; i++)
 			fprintf(stderr, " %ld[%u]", lit_to_dimacs(a[i]), vars[var(a[i])].trail_pos_plus1-1);
 		fprintf(stderr, "\n");
 #endif
-		for (; a < b; a++)
-			if (td(*a)) {
-				if (lit2tp(*a) != ~l)
-					v[1].push_back(lit2tp(*a));
-			} else
+		v[1].push_back(lit2tp(lit2tp(a[0]) == ~l ? a[1] : a[0]));
+		for (a += 2; a < b; a++)
+			if (td(*a))
+				v[1].push_back(lit2tp(*a));
+			else
 				v[0].push_back(*a);
-		#if 1
-		sort(v[1].begin(), v[1].end());
+
+		sort(v[1].begin(), v[1].end()); /* tp1 descending */
 		v[1].erase(unique(v[1].begin(), v[1].end()), v[1].end());
-		#else
-		for (auto &vv : v) {
-			sort(vv.begin(), vv.end(), [tp1](lit a, lit b){ return tp1(a) > tp1(b); });
-			vv.erase(unique(vv.begin(), vv.end()), vv.end());
-		}
-		#endif
 #if 0
 		fprintf(stderr, "resolved to");
 		for (int i=1; i>=0; i--)
@@ -341,16 +331,14 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 #endif
 		m.tick();
 	}
-	s(v[0]);
+	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 ascending */
+	v[0].erase(unique(v[0].begin(), v[0].end()), v[0].end());
 	assert(v[1].size() == 1);
-	cl.clear();
-	cl.push_back(tp2lit(v[1][0]));
-	uint32_t max_tp1 = 0;
-	for (lit k : v[0]) {
-		cl.push_back(k);
-		if (max_tp1 < tp1(k))
-			max_tp1 = tp1(k);
-	}
+	v[1].reserve(1+v[0].size());
+	v[1][0] = tp2lit(v[1][0]);
+	for (lit l : v[0])
+		v[1].push_back(l);
+	uint32_t max_tp1 = v[0].empty() ? 0 : tp1(v[0][0]);
 	for (dec=decisions.size(); dec>0; dec--)
 		if (max_tp1 > decisions[dec-1])
 			break;
@@ -381,6 +369,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 #endif
 	m.stop();
 	*resolutions += m.n;
+	*rt += m.t;
 #if 0
 	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
 	        decisions.size(), decisions.back(), m.t, m.n, cl.size(), dec);
@@ -388,10 +377,10 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 #else
 	cl.clear();
 #endif
-	if (cl.empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
-		cl.resize(decisions.size());
+	if (0 && v[1].empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
+		v[1].resize(decisions.size());
 		for (uint32_t i=0; i<decisions.size(); i++)
-			cl[decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
+			v[1][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
 		return decisions.size()-1;
 	} else {
 		return dec;
@@ -400,9 +389,9 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutio
 
 int ksat::run()
 {
-	vector<lit> cl;
+	vector<lit> cl[2];
 	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0;
-	unsigned long pt = 0;
+	unsigned long pt = 0, rt = 0;
 	timer t;
 	t.start();
 	int r = 0;
@@ -414,13 +403,13 @@ int ksat::run()
 				for (const auto &c : db.chunks)
 					n += c.valid;
 				double s = t.get()/1e6;
-				fprintf(stderr, "time: %.1fs, conflicts: %lu (%.1f/s), avg. learnt sz: %.1f lits, decisions: %lu (%.1f/s), propagations: %lu (%.4g/s), resolutions: %lu, cl db: %u MiB\n",
+				fprintf(stderr, "time: %.1fs, conflicts: %lu (%.1f/s), avg. learnt sz: %.1f lits, decisions: %lu (%.1f/s), propagations: %lu (%.4g/s), resolutions: %lu (%.4g/s), cl db: %u MiB\n",
 					s,
 					conflicts, conflicts/s,
 					10*learnt_lits/conflicts*.1,
 					n_decisions, n_decisions/s,
 					propagations, propagations/(pt/1e6),
-					resolutions,
+					resolutions, resolutions/(rt/1e6),
 					n>>(20-2));
 			}
 			if (decisions.empty()) {
@@ -428,10 +417,10 @@ int ksat::run()
 				r = 20;
 				goto done;
 			}
-			uint32_t decision_level = analyze(w, cl, &resolutions);
-			learnt_lits += cl.size();
+			uint32_t decision_level = analyze(w, cl, &resolutions, &rt);
+			learnt_lits += cl[1].size();
 			trackback(decision_level);
-			add_clause0(cl);
+			add_clause0(cl[1]);
 		}
 		lit d = next_decision();
 		if (var(d) >= nvars) {
@@ -545,7 +534,6 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 void ksat::add_clause0(vector<lit> &cl)
 {
 	unsigned j=0;
-	bool sat = false;
 #if 0
 	fprintf(stderr, "adding clause");
 	unsigned i;
@@ -555,12 +543,16 @@ void ksat::add_clause0(vector<lit> &cl)
 		fprintf(stderr, " ...");
 	fprintf(stderr, "\n");
 #endif
+#if 0
 	for (unsigned i=0; j<2 && i<cl.size(); i++)
-		if (!vars[var(cl[i])].have())
+		if (!vars[var(cl[i])].have()) {
+			assert(j == i);
 			swap(cl[j++], cl[i]);
-		else
-			sat |= vars[var(cl[i])].value == sign(cl[i]);
-	assert(!sat);
+		} else
+			assert(vars[var(cl[i])].value != sign(cl[i]));
+#else
+	j = 1;
+#endif
 	if (cl.size() < 2) {
 		assert(decisions.empty());
 		if (cl.size() == 0 || !add_unit(cl[0]))
@@ -570,12 +562,16 @@ void ksat::add_clause0(vector<lit> &cl)
 	assert(j == 1);
 	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
+#if 0
 	unsigned w = 1;
 	for (unsigned k=2; k<cl.size(); k++)
 		if (vars[var(cl[k])].trail_pos_plus1 >
-		    vars[var(cl[w])].trail_pos_plus1)
+		    vars[var(cl[w])].trail_pos_plus1) {
+			assert(0);
 			w = k;
+		}
 	swap(cl[1], cl[w]);
+#endif
 	if (cl.size() == 2) {
 		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
 		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
