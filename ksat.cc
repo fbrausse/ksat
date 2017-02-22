@@ -70,6 +70,15 @@ ksat::~ksat()
 	delete[] watches;
 }
 
+void ksat::init(uint32_t nvars)
+{
+	this->nvars = nvars;
+	vars    = new var_desc[nvars];
+	watches = new vec<watch>[2*nvars];
+	//assigns.init(nvars);
+	units.reserve(nvars);
+}
+
 #include <sys/time.h>
 
 struct timer {
@@ -94,28 +103,26 @@ struct measurement {
 	double avg_us() const { return (double)t/n; }
 };
 
-const watch * ksat::propagate_units(void)
+const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt)
 {
 	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
-	measurement m;
 	const watch *w = nullptr;
-	//bool p = false;
-	m.start();
+	unsigned long up = unit_ptr;
+	timer t;
+	t.start();
 	for (; unit_ptr < units.size(); unit_ptr++) {
 		w = propagate_single(units[unit_ptr].implied_lit);
-#if 0
-		fprintf(stderr, "propagation of %ld: %s\n",
-		        lit_to_dimacs(units[unit_ptr]), p ? "conflict" : "OK");
-#endif
-		m.tick();
 		if (w)
 			break;
 	}
-	m.stop();
+	*propagations += (unit_ptr-up) + (w != nullptr);
+	*pt += t.get();
+#if 0
 	fprintf(stderr, "dl %zu: %ld[%u] propagations: %lu in %luus (%g props/sec)\n",
 	        decisions.size(),
 	        decisions.empty() ? 0 : lit_to_dimacs(units[decisions.back()].implied_lit),
 	        decisions.empty() ? 0 : decisions.back(), m.n, m.t, 1e6/m.avg_us());
+#endif
 	return w;
 }
 
@@ -158,6 +165,10 @@ uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl
 #endif
 	assert(!v.empty());
 	assert(lqs < lqe);
+
+	assert(lqs[0] == ~l || lqs[1] == ~l);
+	assert(v[0] == l || v[1] == l);
+
 	unsigned m = lqe-lqs-1 + v.size()-1;
 	cl.resize(lqe-lqs-1 + v.size()-1);
 	unsigned j=0;
@@ -218,7 +229,48 @@ uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl
 	}
 }
 
-uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
+template <typename V, typename Le>
+void bin_heap_sift_up(V &v, uint32_t i, Le le)
+{
+	while (i && !le(v[i/2], v[i])) {
+		swap(v[i/2], v[i]);
+		i = i/2;
+	}
+}
+
+template <typename V, typename Le>
+void bin_heap_insert(V &v, lit l, Le le)
+{
+	uint32_t i = v.size();
+	v.push_back(l);
+	bin_heap_sift_up(v, i, le);
+}
+
+template <typename V, typename Le>
+static void heapify(V &v, uint32_t i, const Le &le)
+{
+	while (1) {
+		uint32_t c0 = 2*i+1;
+		uint32_t min = i;
+		if (c0 < v.size() && !le(v[min], v[c0]))
+			min = c0;
+		if (c0+1 < v.size() && !le(v[min], v[c0+1]))
+			min = c0+1;
+		if (min == i)
+			return;
+		swap(v[i], v[min]);
+		i = min;
+	}
+}
+
+template <typename V, typename Le>
+static void build_bin_heap(V &v, const Le &le, uint32_t s=0)
+{
+	for (uint32_t i=v.size()/2; i>s; i--)
+		heapify(v, i-1, le);
+}
+
+uint32_t ksat::analyze(const watch *w, vector<lit> &cl, unsigned long *resolutions)
 {
 	uint32_t dec;
 #if 1
@@ -227,11 +279,103 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
 	measurement m;
 	m.start();
 	deref(w->this_cl, clp, &a, &b);
+#if 1
+	auto tp1 = [this](lit l){ return vars[var(l)].trail_pos_plus1; };
+	auto td = [tp1,k=decisions.back()](lit l){ return tp1(l) > k; };
+	auto lt = [tp1](lit a, lit b){ return tp1(a) > tp1(b); };
+	auto s = [lt](vector<lit> &vv) {
+		sort(vv.begin(), vv.end(), lt);
+		vv.erase(unique(vv.begin(), vv.end()), vv.end());
+	};
+	lit l = w->implied_lit;
+	vector<lit> v[2];
+	for (; a < b; a++)
+		v[td(*a)].push_back(*a);
+	sort(v[1].begin(), v[1].end(), lt);
+	while (v[1].size() > 1) {
+		if (v[1].size() <= 1)
+			break;
+#if 0
+		fprintf(stderr, "resolve1:");
+		for (int i=1; i>=0; i--)
+			for (lit k : v[i])
+				fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+		fprintf(stderr, "\n");
+#endif
+		l = v[1].front();
+		v[1][0] = v[1].back();
+		v[1].pop_back();
+		deref(units[vars[var(l)].trail_pos_plus1-1].this_cl, clp, &a, &b);
+#if 0
+		fprintf(stderr, "resolve2:");
+		for (unsigned i=0; a+i<b; i++)
+			fprintf(stderr, " %ld[%u]", lit_to_dimacs(a[i]), vars[var(a[i])].trail_pos_plus1-1);
+		fprintf(stderr, "\n");
+#endif
+		for (; a < b; a++)
+			if (*a != ~l)
+				v[td(*a)].push_back(*a);
+		#if 1
+		s(v[1]);
+		#else
+		for (auto &vv : v) {
+			sort(vv.begin(), vv.end(), [tp1](lit a, lit b){ return tp1(a) > tp1(b); });
+			vv.erase(unique(vv.begin(), vv.end()), vv.end());
+		}
+		#endif
+#if 0
+		fprintf(stderr, "resolved to");
+		for (int i=1; i>=0; i--)
+			for (lit k : v[i])
+				fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
+		fprintf(stderr, "\n");
+#endif
+		m.tick();
+	}
+	s(v[0]);
+	assert(v[1].size() == 1);
+	cl.clear();
+	cl.push_back(v[1][0]);
+	uint32_t max_tp1 = 0;
+	for (lit k : v[0]) {
+		cl.push_back(k);
+		if (max_tp1 < tp1(k))
+			max_tp1 = tp1(k);
+	}
+	for (dec=decisions.size(); dec>0; dec--)
+		if (max_tp1 > decisions[dec-1])
+			break;
+#if 0
+	vector<lit> v(b-a-1+d-c-1);
+	v[0] = a[0] == l ? a[1] : a[0];
+	v[1] = c[0] == ~l ? c[1] : c[0];
+	memcpy(v.data()+2, a+2, (b-a-2) * sizeof(lit));
+	memcpy(v.data()+(b-a), c+2, (d-c-2) * sizeof(lit));
+	auto heap = [this](lit p, lit c){
+		return vars[var(p)].trail_pos_plus1 > vars[var(c)].trail_pos_plus1;
+	};
+	build_bin_heap(v, heap, 1);
+	bool x;
+	while ((x = tp(v[1]) > decisions.back()) ||
+	       (v.size() > 2 && tp(v[2]) > decisions.back())) {
+		/* at least 2 left on this decision level */
+		l = v[0];
+		deref(units[vars[var(l)].trail_pos_plus1-1].this_cl, clq, &c, &d);
+		v[0] = c[0] == ~l ? c[1] : c[0];
+		
+	}
+	dec = resolve_conflict2(v, l, cl, &m.n);
+#endif
+#else
 	vector<lit> v(a, b);
 	dec = resolve_conflict(v, w->implied_lit, cl, &m.n);
+#endif
 	m.stop();
-	fprintf(stderr, "resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
-	        m.t, m.n, cl.size(), dec);
+	*resolutions += m.n;
+#if 0
+	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
+	        decisions.size(), decisions.back(), m.t, m.n, cl.size(), dec);
+#endif
 #else
 	cl.clear();
 #endif
@@ -245,109 +389,56 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
 	}
 }
 
-void ksat::add_clause0(vector<lit> &cl)
-{
-	unsigned j=0;
-	bool sat = false;
-#if 1
-	fprintf(stderr, "adding clause");
-	unsigned i;
-	for (i=0; i<std::min((uint32_t)cl.size(), 5U); i++)
-		fprintf(stderr, " %ld[%d]", lit_to_dimacs(cl[i]), vars[var(cl[i])].trail_pos_plus1-1);
-	if (i < cl.size())
-		fprintf(stderr, " ...");
-	fprintf(stderr, "\n");
-#endif
-	for (unsigned i=0; j<2 && i<cl.size(); i++)
-		if (!vars[var(cl[i])].have())
-			swap(cl[j++], cl[i]);
-		else
-			sat |= vars[var(cl[i])].value == sign(cl[i]);
-	assert(!sat);
-	if (cl.size() < 2) {
-		assert(decisions.empty());
-		if (cl.size() == 0 || !add_unit(cl[0]))
-			unsat = true;
-		return;
-	}
-	assert(j == 1);
-	clause_proxy p;
-	/* 0 and especially 1 must be those assigned latest!!! */
-	unsigned w = 1;
-	for (unsigned k=2; k<cl.size(); k++)
-		if (vars[var(cl[k])].trail_pos_plus1 >
-		    vars[var(cl[w])].trail_pos_plus1)
-			w = k;
-	swap(cl[1], cl[w]);
-	if (cl.size() == 2) {
-		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
-		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
-	} else {
-		p.ptr = db.add(cl.size(), true);
-		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
-	}
-	watches[cl[0]].push_back({p,cl[1]});
-	watches[cl[1]].push_back({p,cl[0]});
-	if (j == 1 && cl.size() > 1) {
-		bool ok = add_unit(cl[0], p);
-		assert(ok);
-	}
-}
-
 int ksat::run()
 {
 	vector<lit> cl;
+	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0;
+	unsigned long pt = 0;
+	timer t;
+	t.start();
+	int r = 0;
+	uint32_t learnt_lits = 0;
 	while (1) {
-		while (const watch *w = propagate_units()) {
+		while (const watch *w = propagate_units(&propagations, &pt)) {
+			if (!(++conflicts & 0xff)) {
+				uint32_t n = 0;
+				for (const auto &c : db.chunks)
+					n += c.valid;
+				double s = t.get()/1e6;
+				fprintf(stderr, "time: %.1fs, conflicts: %lu (%.1f/s), avg. learnt sz: %.1f lits, decisions: %lu (%.1f/s), propagations: %lu (%.4g/s), resolutions: %lu, cl db: %u MiB\n",
+					s,
+					conflicts, conflicts/s,
+					10*learnt_lits/conflicts*.1,
+					n_decisions, n_decisions/s,
+					propagations, propagations/(pt/1e6),
+					resolutions,
+					n>>(20-2));
+			}
 			if (decisions.empty()) {
 				unsat = true;
-				return 20;
+				r = 20;
+				goto done;
 			}
-			uint32_t decision_level = analyze(w, cl);
+			uint32_t decision_level = analyze(w, cl, &resolutions);
+			learnt_lits += cl.size();
 			trackback(decision_level);
 			add_clause0(cl);
 		}
 		lit d = next_decision();
-		if (var(d) >= nvars)
-			return 10;
-		fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
-		decisions.push_back(units.size());
-		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
-		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
-	}
-	return 0;
-
-
-
-
-	unsat |= (bool)propagate_units();
-
-	for (lit d; !unsat && var(d = next_decision()) < nvars;) {
-		decisions.push_back(units.size());
-		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
-		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
-		const watch *w;
-		while (unit_ptr < units.size() && (w = propagate_units())) {
-			if (!decisions.size()) {
-				unsat = true;
-				break;
-			}
-			uint32_t decision_level = analyze(w, cl);
-			trackback(decision_level);
-			add_clause0(cl);
-			cl.clear();
+		if (var(d) >= nvars) {
+			r = 10;
+			goto done;
 		}
+		n_decisions++;
+		// fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
+		decisions.push_back(units.size());
+		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
+		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
 	}
-	return 0;
-}
-
-void ksat::init(uint32_t nvars)
-{
-	this->nvars = nvars;
-	vars    = new var_desc[nvars];
-	watches = new vec<watch>[2*nvars];
-	//assigns.init(nvars);
-	units.reserve(nvars);
+done:
+	fprintf(stderr, "time: %luus, conflicts: %lu, decisions: %lu, propagations: %lu, resolutions: %lu\n",
+	        t.get(), conflicts, n_decisions, propagations, resolutions);
+	return r;
 }
 
 const watch * ksat::propagate_single(lit l)
@@ -440,6 +531,55 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 	units.push_back({p,l});
 	v = var_desc{sign(l),(uint32_t)units.size()};
 	return true;
+}
+
+void ksat::add_clause0(vector<lit> &cl)
+{
+	unsigned j=0;
+	bool sat = false;
+#if 0
+	fprintf(stderr, "adding clause");
+	unsigned i;
+	for (i=0; i<std::min((uint32_t)cl.size(), 5U); i++)
+		fprintf(stderr, " %ld[%d]", lit_to_dimacs(cl[i]), vars[var(cl[i])].trail_pos_plus1-1);
+	if (i < cl.size())
+		fprintf(stderr, " ...");
+	fprintf(stderr, "\n");
+#endif
+	for (unsigned i=0; j<2 && i<cl.size(); i++)
+		if (!vars[var(cl[i])].have())
+			swap(cl[j++], cl[i]);
+		else
+			sat |= vars[var(cl[i])].value == sign(cl[i]);
+	assert(!sat);
+	if (cl.size() < 2) {
+		assert(decisions.empty());
+		if (cl.size() == 0 || !add_unit(cl[0]))
+			unsat = true;
+		return;
+	}
+	assert(j == 1);
+	clause_proxy p;
+	/* 0 and especially 1 must be those assigned latest!!! */
+	unsigned w = 1;
+	for (unsigned k=2; k<cl.size(); k++)
+		if (vars[var(cl[k])].trail_pos_plus1 >
+		    vars[var(cl[w])].trail_pos_plus1)
+			w = k;
+	swap(cl[1], cl[w]);
+	if (cl.size() == 2) {
+		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
+		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
+	} else {
+		p.ptr = db.add(cl.size(), true);
+		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
+	}
+	watches[cl[0]].push_back({p,cl[1]});
+	watches[cl[1]].push_back({p,cl[0]});
+	if (j == 1 && cl.size() > 1) {
+		bool ok = add_unit(cl[0], p);
+		assert(ok);
+	}
 }
 
 void ksat::add_clause(vector<lit> &c)

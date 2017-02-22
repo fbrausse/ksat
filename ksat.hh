@@ -64,7 +64,8 @@ union clause_proxy {
 	explicit operator bool() const;
 };
 
-#define CLAUSE_PROXY_BIN_MASK	((uint32_t)1 << 31)
+#define LIT_SPARE_BIT		((uint32_t)1 << 31)
+#define CLAUSE_PROXY_BIN_MASK	LIT_SPARE_BIT
 
 static inline bool is_ptr(const clause_proxy &p)
 {
@@ -202,7 +203,7 @@ class ksat {
 	uint32_t nvars;          // constant number of instance variables
 
 	lit next_decision();
-	uint32_t analyze(const watch *w, std::vector<lit> &cl);
+	uint32_t analyze(const watch *w, std::vector<lit> &cl, unsigned long *);
 	void add_clause0(std::vector<lit> &);
 	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *);
 	void trackback(uint32_t dlevel);
@@ -267,7 +268,7 @@ class ksat {
 	};
 
 	const watch * propagate_single(lit l);
-	const watch * propagate_units(void);
+	const watch * propagate_units(unsigned long *, unsigned long *);
 
 public:
 	ksat(const ksat &) = delete;
