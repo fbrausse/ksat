@@ -204,5 +204,18 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 		do_dump(solver, dump);
 		fclose(dump);
 	}
+	if (r == 10) {
+		printf("s SATISFIABLE\n");
+		printf("v");
+		unsigned n = 0;
+		for (auto it = solver.units_begin(); it != solver.units_end(); ++it) {
+			if (++n % 10 == 0)
+				printf("\nv");
+			printf(" %ld", lit_to_dimacs(it->implied_lit));
+		}
+		printf("\n");
+	} else {
+		printf("s UNSATISFIABLE\n");
+	}
 	return r;
 }

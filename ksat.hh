@@ -204,7 +204,7 @@ class ksat {
 	lit next_decision();
 	uint32_t analyze(const watch *w, std::vector<lit> &cl);
 	void add_clause0(std::vector<lit> &);
-	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl);
+	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *);
 	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});

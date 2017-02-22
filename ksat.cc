@@ -72,28 +72,50 @@ ksat::~ksat()
 
 #include <sys/time.h>
 
+struct timer {
+	struct timeval tv;
+	void start() { gettimeofday(&tv, NULL); }
+	unsigned long get() const
+	{
+		struct timeval tw;
+		gettimeofday(&tw, NULL);
+		return (tw.tv_sec-tv.tv_sec)*1000000+(tw.tv_usec-tv.tv_usec);
+	}
+};
+
+struct measurement {
+	timer tt;
+	unsigned long t = 0;
+	unsigned long n = 0;
+
+	void start() { tt.start(); }
+	void stop() { t += tt.get(); }
+	void tick() { n++; }
+	double avg_us() const { return (double)t/n; }
+};
+
 const watch * ksat::propagate_units(void)
 {
-	fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
-	unsigned props = 0;
-	struct timeval tv, tw;
-	gettimeofday(&tv, NULL);
+	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
+	measurement m;
 	const watch *w = nullptr;
 	//bool p = false;
+	m.start();
 	for (; unit_ptr < units.size(); unit_ptr++) {
 		w = propagate_single(units[unit_ptr].implied_lit);
 #if 0
 		fprintf(stderr, "propagation of %ld: %s\n",
 		        lit_to_dimacs(units[unit_ptr]), p ? "conflict" : "OK");
 #endif
-		props++;
+		m.tick();
 		if (w)
 			break;
 	}
-	gettimeofday(&tw, NULL);
-	long us = (tw.tv_sec-tv.tv_sec)*(long)1e6+(tw.tv_usec-tv.tv_usec);
-	fprintf(stderr, "propagations: %u in %luus (%g props/sec)\n",
-	        props, us, props/(us/1e6));
+	m.stop();
+	fprintf(stderr, "dl %zu: %ld[%u] propagations: %lu in %luus (%g props/sec)\n",
+	        decisions.size(),
+	        decisions.empty() ? 0 : lit_to_dimacs(units[decisions.back()].implied_lit),
+	        decisions.empty() ? 0 : decisions.back(), m.n, m.t, 1e6/m.avg_us());
 	return w;
 }
 
@@ -107,6 +129,8 @@ lit ksat::next_decision()
 
 void ksat::trackback(uint32_t dlevel) // to including dlevel
 {
+	for (uint32_t i=dlevel; i<decisions.size(); i++)
+		vars[var(units[decisions[i]].implied_lit)].value ^= 1;
 	for (uint32_t i=decisions[dlevel]; i<units.size(); i++)
 		vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
 	units.resize(decisions[dlevel]);
@@ -114,14 +138,15 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	unit_ptr = units.size();
 }
 
-uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl)
+uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *steps)
 {
 	const watch *w = &units[vars[var(l)].trail_pos_plus1-1];
 	assert(l == ~w->implied_lit);
 	const lit *lqs, *lqe;
 	lit clq[2];
+	++*steps;
 	deref(w->this_cl, clq, &lqs, &lqe);
-#if 1
+#if 0
 	fprintf(stderr, "resolve1:");
 	for (lit k : v)
 		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
@@ -145,7 +170,7 @@ uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl
 	// cl.resize(j);
 	assert(m == j);
 	sort(cl.begin(), cl.begin()+m, [this](lit a, lit b){
-		return vars[var(a)].trail_pos_plus1 < vars[var(b)].trail_pos_plus1;
+		return vars[var(a)].trail_pos_plus1 > vars[var(b)].trail_pos_plus1;
 	});
 	assert(m > 0);
 	unsigned n_this_dl = 0;
@@ -172,7 +197,7 @@ uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl
 			max_tp = tp;
 	}
 	cl.resize(j);
-#if 1
+#if 0
 	fprintf(stderr, "resolved to");
 	for (lit k : cl)
 		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
@@ -189,22 +214,31 @@ uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl
 	} else {
 		// resolve cl with the reason for the most recently implied (false) literal in cl
 		swap(v, cl);
-		return resolve_conflict(v, ~units[most_recent_this_dl].implied_lit, cl);
+		return resolve_conflict(v, ~units[most_recent_this_dl].implied_lit, cl, steps);
 	}
 }
 
 uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
 {
+	uint32_t dec;
+#if 1
 	lit clp[2];
 	const lit *a, *b;
+	measurement m;
+	m.start();
 	deref(w->this_cl, clp, &a, &b);
 	vector<lit> v(a, b);
-	uint32_t dec = resolve_conflict(v, w->implied_lit, cl);
-	fprintf(stderr, "resolution done, resulted in clause of size %zu\n", cl.size());
-
+	dec = resolve_conflict(v, w->implied_lit, cl, &m.n);
+	m.stop();
+	fprintf(stderr, "resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
+	        m.t, m.n, cl.size(), dec);
+#else
+	cl.clear();
+#endif
 	if (cl.empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
-		for (uint32_t i : decisions)
-			cl.push_back(~units[i].implied_lit);
+		cl.resize(decisions.size());
+		for (uint32_t i=0; i<decisions.size(); i++)
+			cl[decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
 		return decisions.size()-1;
 	} else {
 		return dec;
@@ -213,17 +247,31 @@ uint32_t ksat::analyze(const watch *w, vector<lit> &cl)
 
 void ksat::add_clause0(vector<lit> &cl)
 {
-	clause_proxy p;
 	unsigned j=0;
 	bool sat = false;
+#if 1
+	fprintf(stderr, "adding clause");
+	unsigned i;
+	for (i=0; i<std::min((uint32_t)cl.size(), 5U); i++)
+		fprintf(stderr, " %ld[%d]", lit_to_dimacs(cl[i]), vars[var(cl[i])].trail_pos_plus1-1);
+	if (i < cl.size())
+		fprintf(stderr, " ...");
+	fprintf(stderr, "\n");
+#endif
 	for (unsigned i=0; j<2 && i<cl.size(); i++)
 		if (!vars[var(cl[i])].have())
 			swap(cl[j++], cl[i]);
 		else
 			sat |= vars[var(cl[i])].value == sign(cl[i]);
-	assert(j <= 1);
 	assert(!sat);
-	assert(cl.size() >= 2);
+	if (cl.size() < 2) {
+		assert(decisions.empty());
+		if (cl.size() == 0 || !add_unit(cl[0]))
+			unsat = true;
+		return;
+	}
+	assert(j == 1);
+	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
 	unsigned w = 1;
 	for (unsigned k=2; k<cl.size(); k++)
@@ -231,25 +279,12 @@ void ksat::add_clause0(vector<lit> &cl)
 		    vars[var(cl[w])].trail_pos_plus1)
 			w = k;
 	swap(cl[1], cl[w]);
-	switch (cl.size()) {
-	case 1:
-		if (add_unit(cl[0]))
-			return;
-		/* fall through */
-	case 0:
-		unsat = true;
-		return;
-	case 2:
+	if (cl.size() == 2) {
 		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
 		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
-		break;
-	default:
+	} else {
 		p.ptr = db.add(cl.size(), true);
-		if (p.ptr.offset == 145188) {
-			//abort();
-		}
 		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
-		break;
 	}
 	watches[cl[0]].push_back({p,cl[1]});
 	watches[cl[1]].push_back({p,cl[0]});
@@ -275,6 +310,7 @@ int ksat::run()
 		lit d = next_decision();
 		if (var(d) >= nvars)
 			return 10;
+		fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
 		decisions.push_back(units.size());
 		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
 		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
