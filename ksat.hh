@@ -179,6 +179,30 @@ struct assignments {
 	clptr operator[](lit l) const { return { data[var(l)/4], (uint8_t)((var(l) & 3) << 1), 1U << sign(l) }; }
 };
 
+#include <sys/time.h>
+
+struct timer {
+	struct timeval tv;
+	void start() { gettimeofday(&tv, NULL); }
+	unsigned long get() const
+	{
+		struct timeval tw;
+		gettimeofday(&tw, NULL);
+		return (tw.tv_sec-tv.tv_sec)*1000000+(tw.tv_usec-tv.tv_usec);
+	}
+};
+
+struct measurement {
+	timer tt;
+	unsigned long t = 0;
+	unsigned long n = 0;
+
+	void start() { tt.start(); }
+	void stop() { t += tt.get(); }
+	void tick() { n++; }
+	double avg_us() const { return (double)t/n; }
+};
+
 class ksat {
 
 	struct var_desc {
@@ -203,9 +227,9 @@ class ksat {
 	uint32_t nvars;          // constant number of instance variables
 
 	lit next_decision() const;
-	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *) const;
+	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *, unsigned long *) const;
 	void add_clause0(std::vector<lit> &);
-	uint32_t resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *) const;
+	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});

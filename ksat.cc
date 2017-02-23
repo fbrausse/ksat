@@ -79,30 +79,6 @@ void ksat::init(uint32_t nvars)
 	units.reserve(nvars);
 }
 
-#include <sys/time.h>
-
-struct timer {
-	struct timeval tv;
-	void start() { gettimeofday(&tv, NULL); }
-	unsigned long get() const
-	{
-		struct timeval tw;
-		gettimeofday(&tw, NULL);
-		return (tw.tv_sec-tv.tv_sec)*1000000+(tw.tv_usec-tv.tv_usec);
-	}
-};
-
-struct measurement {
-	timer tt;
-	unsigned long t = 0;
-	unsigned long n = 0;
-
-	void start() { tt.start(); }
-	void stop() { t += tt.get(); }
-	void tick() { n++; }
-	double avg_us() const { return (double)t/n; }
-};
-
 const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt)
 {
 	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
@@ -147,141 +123,12 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	unit_ptr = units.size();
 }
 
-uint32_t ksat::resolve_conflict(std::vector<lit> &v, lit l, std::vector<lit> &cl, unsigned long *steps) const
+int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
-	const watch *w = &units[vars[var(l)].trail_pos_plus1-1];
-	assert(l == ~w->implied_lit);
-	const lit *lqs, *lqe;
-	lit clq[2];
-	++*steps;
-	deref(w->this_cl, clq, &lqs, &lqe);
-#if 0
-	fprintf(stderr, "resolve1:");
-	for (lit k : v)
-		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
-	fprintf(stderr, "\n");
-	fprintf(stderr, "resolve2:");
-	for (unsigned i=0; lqs+i<lqe; i++)
-		fprintf(stderr, " %ld[%u]", lit_to_dimacs(lqs[i]), vars[var(lqs[i])].trail_pos_plus1-1);
-	fprintf(stderr, "\n");
-#endif
-	assert(!v.empty());
-	assert(lqs < lqe);
-
-	assert(lqs[0] == ~l || lqs[1] == ~l);
-	assert(v[0] == l || v[1] == l);
-
-	unsigned m = lqe-lqs-1 + v.size()-1;
-	cl.resize(lqe-lqs-1 + v.size()-1);
-	unsigned j=0;
-	for (lit k : v)
-		if (k != l)
-			cl[j++] = k;
-	for (; lqs < lqe; lqs++)
-		if (*lqs != ~l)
-			cl[j++] = *lqs;
-	// cl.resize(j);
-	assert(m == j);
-	sort(cl.begin(), cl.begin()+m, [this](lit a, lit b){
-		return vars[var(a)].trail_pos_plus1 > vars[var(b)].trail_pos_plus1;
-	});
-	assert(m > 0);
-	unsigned n_this_dl = 0;
-	uint32_t max_tp = 0;
-	uint32_t most_recent_this_dl = 0;
-	j = cl.size() != 0;
-	for (unsigned i=0; i<m; i++) {
-		lit k = cl[i];
-		if (i > 0) {
-			uint32_t x = cl[j-1] ^ k;
-			if (!x) continue;
-			if (x == 1) {
-				fprintf(stderr, "tautology\n");
-				cl.clear();
-				return decisions.size()-1;
-			}
-			cl[j++] = k;
-		}
-		uint32_t tp = vars[var(k)].trail_pos_plus1-1;
-		if (tp >= decisions.back()) {
-			if (!n_this_dl++ || most_recent_this_dl < tp)
-				most_recent_this_dl = tp;
-		} else if (max_tp < tp)
-			max_tp = tp;
-	}
-	cl.resize(j);
-#if 0
-	fprintf(stderr, "resolved to");
-	for (lit k : cl)
-		fprintf(stderr, " %ld[%u]", lit_to_dimacs(k), vars[var(k)].trail_pos_plus1-1);
-	fprintf(stderr, "\n");
-	fprintf(stderr, "dl: %zu[%u], on this dl: %u, max_tp not on this dl: %u, most recent on this dl: %u, j: %u\n",
-	        decisions.size()-1, decisions.back(), n_this_dl, max_tp, most_recent_this_dl, j);
-#endif
-	if (n_this_dl <= 1) {
-		unsigned dec;
-		for (dec=decisions.size(); dec>0; dec--)
-			if (max_tp >= decisions[dec-1])
-				break;
-		return dec;
-	} else {
-		// resolve cl with the reason for the most recently implied (false) literal in cl
-		swap(v, cl);
-		return resolve_conflict(v, ~units[most_recent_this_dl].implied_lit, cl, steps);
-	}
-}
-
-template <typename V, typename Le>
-void bin_heap_sift_up(V &v, uint32_t i, Le le)
-{
-	while (i && !le(v[i/2], v[i])) {
-		swap(v[i/2], v[i]);
-		i = i/2;
-	}
-}
-
-template <typename V, typename Le>
-void bin_heap_insert(V &v, lit l, Le le)
-{
-	uint32_t i = v.size();
-	v.push_back(l);
-	bin_heap_sift_up(v, i, le);
-}
-
-template <typename V, typename Le>
-static void heapify(V &v, uint32_t i, const Le &le)
-{
-	while (1) {
-		uint32_t c0 = 2*i+1;
-		uint32_t min = i;
-		if (c0 < v.size() && !le(v[min], v[c0]))
-			min = c0;
-		if (c0+1 < v.size() && !le(v[min], v[c0+1]))
-			min = c0+1;
-		if (min == i)
-			return;
-		swap(v[i], v[min]);
-		i = min;
-	}
-}
-
-template <typename V, typename Le>
-static void build_bin_heap(V &v, const Le &le, uint32_t s=0)
-{
-	for (uint32_t i=v.size()/2; i>s; i--)
-		heapify(v, i-1, le);
-}
-
-uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resolutions, unsigned long *rt) const
-{
-	uint32_t dec;
-#if 1
 	lit clp[2];
 	const lit *a, *b;
-	measurement m;
-	m.start();
+	uint32_t dec;
 	deref(w->this_cl, clp, &a, &b);
-#if 1
 	auto tp1 = [this](lit l){ return vars[var(l)].trail_pos_plus1; };
 	auto td = [tp1,k=decisions.back()](lit l){ return tp1(l) > k; };
 	auto gt = [tp1](lit a, lit b){ return tp1(a) > tp1(b); };
@@ -291,20 +138,27 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 	v[0].clear();
 	v[1].clear();
 	v[1].reserve(b-a);
-	for (; a < b; a++) {
+	v[1].push_back(lit2tp(a[0] == l ? a[1] : a[0]));
+	for (a += 2; a < b; a++) {
 		if (td(*a))
 			v[1].push_back(lit2tp(*a));
 		else
 			v[0].push_back(*a);
 	}
+	assert(v[1].size() >= 1);
+	l = lit2tp(l);
+	goto in;
 	while (v[1].size() > 1) {
-#if 0
-		fprintf(stderr, "resolve1:");
-		for (int i=1; i>=0; i--)
+#if 1
+		fprintf(stderr, "dl %zu:%u resolve1:", decisions.size(), decisions.back());
+		for (int i=1; i>=0; i--) {
+			fprintf(stderr, " %zu:", v[i].size());
 			for (lit k : v[i])
 				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
+		}
 		fprintf(stderr, "\n");
 #endif
+		{
 		unsigned max = 0;
 		l = v[1][max];
 		for (unsigned i=1; i<v[1].size(); i++) {
@@ -319,14 +173,16 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 		}
 		if (v[1].size() == 1)
 			break;
-		else if (v[1].size() > decisions.size()) {
+		else if (0 && v[0].size() > 16*decisions.size()) {
 			v[1].clear();
-			goto out;
+			return -1;
 		}
 		v[1][max] = v[1].back();
+		}
 		v[1].pop_back();
+in:
 		deref(units[var(l)-1].this_cl, clp, &a, &b);
-#if 0
+#if 1
 		fprintf(stderr, "dl %zu:%u resolve2:", decisions.size(), decisions.back());
 		for (unsigned i=0; a+i<b; i++)
 			fprintf(stderr, " %ld[%u]", lit_to_dimacs(a[i]), vars[var(a[i])].trail_pos_plus1-1);
@@ -338,11 +194,13 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 				v[1].push_back(lit2tp(*a));
 			else
 				v[0].push_back(*a);
-#if 0
-		fprintf(stderr, "resolved to");
-		for (int i=1; i>=0; i--)
+#if 1
+		fprintf(stderr, "dl %zu:%u resolved to", decisions.size(), decisions.back());
+		for (int i=1; i>=0; i--) {
+			fprintf(stderr, " %zu:", v[i].size());
 			for (lit k : v[i])
 				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
+		}
 		fprintf(stderr, "\n");
 #endif
 		m.tick();
@@ -354,54 +212,36 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 	v[1][0] = tp2lit(v[1][0]);
 	for (lit l : v[0])
 		v[1].push_back(l);
-	{
 	uint32_t max_tp1 = v[0].empty() ? 0 : tp1(v[0][0]);
 	for (dec=decisions.size(); dec>0; dec--)
 		if (max_tp1 > decisions[dec-1])
 			break;
-	}
-#if 0
-	vector<lit> v(b-a-1+d-c-1);
-	v[0] = a[0] == l ? a[1] : a[0];
-	v[1] = c[0] == ~l ? c[1] : c[0];
-	memcpy(v.data()+2, a+2, (b-a-2) * sizeof(lit));
-	memcpy(v.data()+(b-a), c+2, (d-c-2) * sizeof(lit));
-	auto heap = [this](lit p, lit c){
-		return vars[var(p)].trail_pos_plus1 > vars[var(c)].trail_pos_plus1;
-	};
-	build_bin_heap(v, heap, 1);
-	bool x;
-	while ((x = tp(v[1]) > decisions.back()) ||
-	       (v.size() > 2 && tp(v[2]) > decisions.back())) {
-		/* at least 2 left on this decision level */
-		l = v[0];
-		deref(units[vars[var(l)].trail_pos_plus1-1].this_cl, clq, &c, &d);
-		v[0] = c[0] == ~l ? c[1] : c[0];
-		
-	}
-	dec = resolve_conflict2(v, l, cl, &m.n);
-#endif
-#else
-	vector<lit> v(a, b);
-	dec = resolve_conflict(v, w->implied_lit, cl, &m.n);
-#endif
+	return dec;
+}
+
+uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learnt, unsigned long *resolutions, unsigned long *rt) const
+{
+	int32_t dec = -1;
+	measurement m;
+	m.start();
+
+	//if ((nvars-decisions.front())/(unit_ptr+1-decisions.back()) > decisions.size())
+	dec = resolve_conflict(w, v, m);
+
 	m.stop();
 	*resolutions += m.n;
 	*rt += m.t;
 #if 0
-	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
+	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %d\n",
 	        decisions.size(), decisions.back(), m.t, m.n, v[1].size(), dec);
 #endif
-#else
-	cl.clear();
-#endif
-	if (0 && v[1].empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
-out:
+	if (dec < 0) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
 		v[1].resize(decisions.size());
 		for (uint32_t i=0; i<decisions.size(); i++)
 			v[1][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
 		return decisions.size()-1;
 	} else {
+		++*learnt;
 		return dec;
 	}
 }
@@ -409,7 +249,7 @@ out:
 int ksat::run()
 {
 	vector<lit> cl[2];
-	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0;
+	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0, learnt = 0;
 	unsigned long pt = 0, rt = 0;
 	timer t;
 	t.start();
@@ -425,10 +265,10 @@ int ksat::run()
 				for (const auto &c : db.chunks)
 					n += c.valid;
 				double s = t.get()/1e6;
-				fprintf(stderr, "time: %.1fs, conflicts: %lu (%.1f/s), avg. learnt sz: %.1f lits, decisions: %lu (%.1f/s), propagations: %lu (%.4g/s), resolutions: %lu (%.4g/s), cl db: %u MiB\n",
+				fprintf(stderr, "time: %.1fs, confl: %lu (%.1f/s), learnt: %lu avg. sz: %.1f lits, decs: %lu (%.1f/s), props: %lu (%.4g/s), res: %lu (%.4g/s), cl db: %u MiB\n",
 					s,
 					conflicts, conflicts/s,
-					10*learnt_lits/conflicts*.1,
+					learnt, 10*learnt_lits/conflicts*.1,
 					n_decisions, n_decisions/s,
 					propagations, propagations/(pt/1e6),
 					resolutions, resolutions/(rt/1e6),
@@ -439,7 +279,7 @@ int ksat::run()
 				r = 20;
 				goto done;
 			}
-			uint32_t decision_level = analyze(w, cl, &resolutions, &rt);
+			uint32_t decision_level = analyze(w, cl, &learnt, &resolutions, &rt);
 			learnt_lits += cl[1].size();
 			trackback(decision_level);
 			add_clause0(cl[1]);
