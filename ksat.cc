@@ -115,13 +115,15 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 		if (w)
 			break;
 	}
-	*propagations += (unit_ptr-up) + (w != nullptr);
-	*pt += t.get();
+	unsigned long us = t.get();
+	unsigned long n = (unit_ptr-up) + (w != nullptr);
+	*propagations += n;
+	*pt += us;
 #if 0
 	fprintf(stderr, "dl %zu: %ld[%u] propagations: %lu in %luus (%g props/sec)\n",
 	        decisions.size(),
 	        decisions.empty() ? 0 : lit_to_dimacs(units[decisions.back()].implied_lit),
-	        decisions.empty() ? 0 : decisions.back(), m.n, m.t, 1e6/m.avg_us());
+	        decisions.empty() ? 0 : decisions.back(), n, t.get(), n/(us/1e6));
 #endif
 	return w;
 }
@@ -295,7 +297,6 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 		else
 			v[0].push_back(*a);
 	}
-	sort(v[1].begin(), v[1].end()); /* tp1 descending */
 	while (v[1].size() > 1) {
 #if 0
 		fprintf(stderr, "resolve1:");
@@ -304,7 +305,21 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
 		fprintf(stderr, "\n");
 #endif
-		l = v[1].back();
+		unsigned max = 0;
+		l = v[1][max];
+		for (unsigned i=1; i<v[1].size(); i++) {
+			lit k = v[1][i];
+			if (l < k) {
+				max = i;
+				l = v[1][max];
+			} else if (l == k) {
+				v[1][i--] = v[1].back();
+				v[1].pop_back();
+			}
+		}
+		if (v[1].size() == 1)
+			break;
+		v[1][max] = v[1].back();
 		v[1].pop_back();
 		deref(units[var(l)-1].this_cl, clp, &a, &b);
 #if 0
@@ -319,9 +334,6 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 				v[1].push_back(lit2tp(*a));
 			else
 				v[0].push_back(*a);
-
-		sort(v[1].begin(), v[1].end()); /* tp1 descending */
-		v[1].erase(unique(v[1].begin(), v[1].end()), v[1].end());
 #if 0
 		fprintf(stderr, "resolved to");
 		for (int i=1; i>=0; i--)
@@ -331,7 +343,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 #endif
 		m.tick();
 	}
-	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 ascending */
+	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 descending */
 	v[0].erase(unique(v[0].begin(), v[0].end()), v[0].end());
 	assert(v[1].size() == 1);
 	v[1].reserve(1+v[0].size());
@@ -372,7 +384,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 	*rt += m.t;
 #if 0
 	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %u\n",
-	        decisions.size(), decisions.back(), m.t, m.n, cl.size(), dec);
+	        decisions.size(), decisions.back(), m.t, m.n, v[1].size(), dec);
 #endif
 #else
 	cl.clear();
@@ -396,9 +408,12 @@ int ksat::run()
 	t.start();
 	int r = 0;
 	uint32_t learnt_lits = 0;
+	unsigned long last_out = 0;
 	while (1) {
 		while (const watch *w = propagate_units(&propagations, &pt)) {
-			if (!(++conflicts & 0xff)) {
+			++conflicts;
+			if (t.get()-last_out > 1000000) {
+				last_out = t.get();
 				uint32_t n = 0;
 				for (const auto &c : db.chunks)
 					n += c.valid;
