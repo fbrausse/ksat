@@ -319,6 +319,10 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 		}
 		if (v[1].size() == 1)
 			break;
+		else if (v[1].size() > decisions.size()) {
+			v[1].clear();
+			goto out;
+		}
 		v[1][max] = v[1].back();
 		v[1].pop_back();
 		deref(units[var(l)-1].this_cl, clp, &a, &b);
@@ -350,10 +354,12 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 	v[1][0] = tp2lit(v[1][0]);
 	for (lit l : v[0])
 		v[1].push_back(l);
+	{
 	uint32_t max_tp1 = v[0].empty() ? 0 : tp1(v[0][0]);
 	for (dec=decisions.size(); dec>0; dec--)
 		if (max_tp1 > decisions[dec-1])
 			break;
+	}
 #if 0
 	vector<lit> v(b-a-1+d-c-1);
 	v[0] = a[0] == l ? a[1] : a[0];
@@ -390,6 +396,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *resol
 	cl.clear();
 #endif
 	if (0 && v[1].empty()) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
+out:
 		v[1].resize(decisions.size());
 		for (uint32_t i=0; i<decisions.size(); i++)
 			v[1][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
