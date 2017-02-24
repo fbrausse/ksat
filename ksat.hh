@@ -2,6 +2,8 @@
 #ifndef KSAT_HH
 #define KSAT_HH
 
+#include "common.h"
+
 #include <cstdlib>	/* abs() */
 #include <cinttypes>	/* uint32_t */
 #include <vector>
@@ -120,7 +122,7 @@ struct clause_db {
 
 	/* usually few chunks, try to keep their descriptors in the cache line
 	 * of this clause_db instance */
-	vec<chunk> chunks;
+	std::vector<chunk> chunks;
 
 	clause_db();
 	clause_db(const clause_db &) = delete;
@@ -208,6 +210,28 @@ struct measurement {
 	double avg_us() const { return (double)t/n; }
 };
 
+struct bitset {
+
+	static constexpr size_t word_bits() { return sizeof(unsigned long)*CHAR_BIT; }
+
+	std::vector<unsigned long> v;
+
+	bitset() {}
+	explicit bitset(uint32_t n) : v((n+word_bits()-1)/word_bits()) {}
+
+	void set(uint32_t p) { v[p/word_bits()] |= 1UL << (p%word_bits()); }
+	void unset(uint32_t p) { v[p/word_bits()] &= ~(1UL << (p%word_bits())); }
+	bool get(uint32_t p) const { return v[p/word_bits()] & (1UL << (p%word_bits())); }
+	int32_t max_bit() const
+	{
+		for (int32_t i=v.size(); i; i--)
+			if (v[i-1])
+				return i * word_bits() - (BSR(v[i-1])+1);
+		return -1;
+	}
+	void resize(uint32_t n) { v.resize((n+word_bits()-1)/word_bits()); }
+};
+
 class ksat {
 
 	struct var_desc {
@@ -233,6 +257,8 @@ class ksat {
 
 	uint32_t *vsids;
 	void reg(lit a);
+
+	mutable bitset avail;
 
 	lit next_decision() const;
 	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *, unsigned long *) const;

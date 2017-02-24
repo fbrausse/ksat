@@ -87,9 +87,13 @@ void ksat::vacuum()
 {
 	uint32_t n = decisions.empty() ? units.size() : decisions.front();
 	clause_db ndb;
+	measurement m;
+	m.start();
+	uint32_t del_w = 0, del_db = 0;
 	for (uint32_t i=0; i<2*nvars; i++) {
 		vec<watch> &ww = watches[i];
 		for (uint32_t j=0; j<ww.size(); j++) {
+			m.tick();
 			watch &w = ww[j];
 			clause *c = nullptr;
 			if (is_ptr(w.this_cl))
@@ -114,6 +118,7 @@ void ksat::vacuum()
 				w = ww.back();
 				ww.pop_back();
 				j--;
+				del_w++;
 				continue;
 			} else if (open == 2) {
 				w.this_cl.l[0] = a[0] | CLAUSE_PROXY_BIN_MASK;
@@ -123,11 +128,14 @@ void ksat::vacuum()
 				memcpy(ndb[w.this_cl.ptr].l, a, open*sizeof(lit));
 			}
 			if (c) {
+				del_db += open == 2 ? c->header.size+1 : (c->header.size - open);
 				c->header.remove = 1;
 				memcpy(c->l, (void *)&w.this_cl, sizeof(w.this_cl));
 			}
 		}
 	}
+	m.stop();
+	fprintf(stderr, "vacuum del %u watches, %u large-cl lits (%lu steps in %luus -> %g/s)\n", del_w, del_db, m.n, m.t, m.n/(m.t/1e6));
 	db.~clause_db();
 	new (&db) clause_db(std::move(ndb));
 }
@@ -274,10 +282,12 @@ in:
 		}
 		fprintf(stderr, "\n");
 #endif
+#if 0
 		if (!(m.n & 0x3ff)) {
 			fprintf(stderr, "%8lu %8zu %8zu        \r", m.n, v[1].size(), v[0].size());
 			fflush(stderr);
 		}
+#endif
 		m.tick();
 	}
 	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 descending */
@@ -294,54 +304,43 @@ in:
 	return dec;
 }
 
-struct bitset {
-
-	static constexpr size_t word_bits() { return sizeof(unsigned long)*CHAR_BIT; }
-
-	vec<unsigned long> v;
-
-	explicit bitset(uint32_t n) : v((n+word_bits()-1)/word_bits()) {}
-
-	void set(uint32_t p) { v[p/word_bits()] |= 1UL << (p%word_bits()); }
-	void unset(uint32_t p) { v[p/word_bits()] &= ~1UL << (p%word_bits()); }
-	bool get(uint32_t p) const { return v[p/word_bits()] & (1UL << (p%word_bits())); }
-	int32_t max_bit() const
-	{
-		for (int32_t i=v.size(); i; i--)
-			if (v[i-1])
-				return i * word_bits() - (BSR(v[i-1])+1);
-		return -1;
-	}
-};
-
 int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
+	const int32_t n = decisions.back();
 	auto tp = [this](lit l){ return vars[var(l)].trail_pos_plus1-1; };
-	auto td = [tp,k=decisions.back()](lit l){ return tp(l) >= k; };
+	auto td = [tp,n](lit l){ return tp(l) >= n; };
 
 	lit tmp[2];
 	const lit *a, *b;
-	bitset avail(unit_ptr+1);
+	avail.resize(units.size());
 	deref(w->this_cl, tmp, &a, &b);
-	for (; a<b; a++)
+	for (; a<b; a++) {
+//		fprintf(stderr, "adding1 %u\n", tp(*a));
 		avail.set(tp(*a));
-	int32_t p, q = avail.max_bit();
+	}
+	int32_t p, q;
 	while (1) {
-		p = q;
-		assert(td({p}));
+		p = avail.max_bit();
+		assert(p >= n);
 		avail.unset(p);
-		if (!td({q = avail.max_bit()}))
+		q = avail.max_bit();
+//		fprintf(stderr, "unset %u, next q: %d\n", p, q);
+		if (q < n)
 			break;
 		deref(units[p].this_cl, tmp, &a, &b);
-		for (; a<b; a++)
-			if (tp(*a) != p) {
-				assert(tp(*a) < p);
-				avail.set(tp(*a));
-			}
+		avail.set(tp(tp(a[0]) == p ? a[1] : a[0]));
+		for (a += 2; a<b; a++) {
+//			fprintf(stderr, "adding2 %u\n", tp(*a));
+			assert(tp(*a) < p);
+			avail.set(tp(*a));
+		}
+		m.tick();
 	}
+	assert(p >= n);
 	v[1].clear();
-	int32_t dec = -1;
-	for (unsigned i=0; (p = avail.max_bit()) >= 0; i++) {
+	v[1].push_back(~units[p].implied_lit);
+	int32_t dec = 0;
+	for (unsigned i=1; (p = avail.max_bit()) >= 0; i++) {
 		if (i == 1)
 			for (dec=decisions.size(); dec>0; dec--)
 				if (p >= decisions[dec-1])
@@ -360,7 +359,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learn
 	m.start();
 
 	//if ((nvars-decisions.front())/(unit_ptr+1-decisions.back()) > decisions.size())
-	dec = resolve_conflict(w, v, m);
+	dec = resolve_conflict2(w, v, m);
 
 	m.stop();
 	*resolutions += m.n;
@@ -410,6 +409,9 @@ int ksat::run()
 		        n>>(20-2));
 	};
 	bool do_vacuum = true;
+	luby_seq luby(1 << 6);
+	unsigned long next_restart = luby();
+	unsigned long last_vacuum = 0;
 	while (1) {
 		while (const watch *w = propagate_units(&propagations, &pt)) {
 			++conflicts;
@@ -424,11 +426,12 @@ int ksat::run()
 			learnt_lits += cl[1].size();
 			trackback(decision_level);
 			add_clause0(cl[1]);
-			if (!(conflicts & 0xff)) {
+			if (conflicts == next_restart) {
 				if (decision_level)
 					trackback(0);
-				do_vacuum = true;
+				do_vacuum = units.size() > last_vacuum;
 				restarts++;
+				next_restart += (++luby)();
 				for (uint32_t i=0; i<2*nvars; i++)
 					vsids[i] = (vsids[i] + 1) >> 1;
 			}
@@ -436,6 +439,7 @@ int ksat::run()
 		if (do_vacuum) {
 			vacuum();
 			do_vacuum = false;
+			last_vacuum = units.size();
 		}
 		lit d = next_decision();
 		if (var(d) >= nvars) {
@@ -632,7 +636,7 @@ void ksat::add_clause(vector<lit> &c)
 			p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
 			p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
 		} else {
-#if 0
+#if 1
 			unsigned w1 = rand() % n;
 			unsigned w2 = rand() % (n-1);
 			if (w2 >= w1)
@@ -695,7 +699,7 @@ void ksat::stats(int verbosity)
 	}
 	fprintf(stderr, "units: %lu MiB\n",
 	        (sizeof(lit) * units.capacity()) >> 20);
-	fprintf(stderr, "%u chunks (cached: %u):", db.chunks.size(), db.chunks.init_cap());
+	fprintf(stderr, "%u chunks (cached: %u):", db.chunks.size(), 0/*db.chunks.init_cap()*/);
 	for (const clause_db::chunk &ch : db.chunks)
 		fprintf(stderr, " %u:%u (%lu MiB)",
 		        ch.valid, ch.size, (ch.size * sizeof(*ch.v)) >> 20);

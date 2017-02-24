@@ -2,8 +2,6 @@
 #ifndef KSAT_UTIL_HH
 #define KSAT_UTIL_HH
 
-#define ARRAY_SIZE(arr)		(sizeof(arr)/sizeof(*(arr)))
-
 #ifndef CACHE_LINE_SZ
 # define CACHE_LINE_SZ	64
 #endif
@@ -62,7 +60,13 @@ public:
 	typedef itr<const vec> const_iterator;
 
 	vec() : body(nullptr), sz(0), cap(init_cap()) {}
-	explicit vec(size_t n) : vec() { reserve(n); }
+	explicit vec(size_t n) : vec()
+	{
+		reserve(n);
+		if (!std::is_pod<T>::value)
+			while (sz < n)
+				new (at(sz++)) T();
+	}
 	~vec()
 	{
 		if (!std::is_pod<T>::value)
@@ -180,9 +184,11 @@ struct concat_itr {
 
 /* as per Knuth */
 class luby_seq {
+	const uint32_t factor;
 	uint32_t un = 1, vn = 1;
 public:
-	uint32_t operator()() const { return vn; }
+	explicit luby_seq(uint32_t factor) : factor(factor) {}
+	uint32_t operator()() const { return factor*vn; }
 	luby_seq & operator++()
 	{
 		if ((un & -un) == vn) {
