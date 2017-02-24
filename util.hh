@@ -62,7 +62,7 @@ public:
 	typedef itr<const vec> const_iterator;
 
 	vec() : body(nullptr), sz(0), cap(init_cap()) {}
-	vec(size_t n) : vec() { reserve(n); }
+	explicit vec(size_t n) : vec() { reserve(n); }
 	~vec()
 	{
 		if (!std::is_pod<T>::value)
@@ -75,9 +75,10 @@ public:
 		if (std::is_pod<T>::value)
 			memcpy(init, o.init, sizeof(init));
 		else
-			for (uint32_t i=0; i<sz; i++)
+			for (uint32_t i=0; i<std::min(sz,init_cap()); i++)
 				new (at(i)) T(std::move(o[i]));
 		o.body = nullptr;
+		o.sz = 0;
 	}
 
 	vec & operator=(vec) = delete;
@@ -152,7 +153,7 @@ public:
 	}
 };
 
-template <typename V,typename I1,typename I2>
+template <typename V, typename I1, typename I2>
 struct concat_itr {
 
 	I1 i1s;
@@ -176,5 +177,62 @@ struct concat_itr {
 	bool operator!=(const concat_itr &o) const { return i1s != o.i1s || i2s != o.i2s; }
 	bool operator==(const concat_itr &o) const { return !(*this != o); }
 };
+
+/* as per Knuth */
+class luby_seq {
+	uint32_t un = 1, vn = 1;
+public:
+	uint32_t operator()() const { return vn; }
+	luby_seq & operator++()
+	{
+		if ((un & -un) == vn) {
+			un++;
+			vn = 1;
+		} else
+			vn <<= 1;
+		return *this;
+	}
+};
+
+template <typename V, typename Le>
+void bin_heap_sift_up(V &v, uint32_t i, Le le)
+{
+	while (i && !le(v[i / 2], v[i])) {
+		swap(v[i / 2], v[i]);
+		i = i / 2;
+	}
+}
+#if 0
+template <typename V, typename Le>
+void bin_heap_insert(V &v, lit l, const Le &le)
+{
+	uint32_t i = v.size();
+	v.push_back(l);
+	bin_heap_sift_up(v, i, le);
+}
+#endif
+template <typename V, typename Le>
+static void heapify(V &v, uint32_t i, const Le& le)
+{
+	while (1) {
+		uint32_t c0 = 2 * i + 1;
+		uint32_t min = i;
+		if (c0 < v.size() && !le(v[min], v[c0]))
+			min = c0;
+		if (c0 + 1 < v.size() && !le(v[min], v[c0 + 1]))
+			min = c0 + 1;
+		if (min == i)
+			return;
+		swap(v[i], v[min]);
+		i = min;
+	}
+}
+
+template <typename V, typename Le>
+static void build_bin_heap(V &v, const Le &le, uint32_t s = 0)
+{
+	for (uint32_t i = v.size() / 2; i > s; i--)
+		heapify(v, i - 1, le);
+}
 
 #endif

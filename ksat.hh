@@ -42,6 +42,7 @@ struct clause {
 	struct clause_header {
 		uint32_t size : LOG_NUM_VARS;
 		uint32_t learnt : 1;
+		uint32_t remove : 1;
 	} header;
 	lit l[]; /* first two are watched */
 
@@ -122,6 +123,10 @@ struct clause_db {
 	vec<chunk> chunks;
 
 	clause_db();
+	clause_db(const clause_db &) = delete;
+	clause_db(clause_db &&) = default;
+
+	clause_db & operator=(clause_db) = delete;
 
 	clause_ptr alloc(uint32_t size);
 	clause_ptr add(uint32_t size, bool learnt);
@@ -129,7 +134,7 @@ struct clause_db {
 	clause &   operator[](clause_ptr p) const;
 
 	iterator begin() const { return iterator(*this, {0,1}); }
-	iterator end()   const { return iterator(*this, {chunks.size(),0}); }
+	iterator end()   const { return iterator(*this, {(uint32_t)chunks.size(),0}); }
 };
 
 struct assignments {
@@ -226,18 +231,38 @@ class ksat {
 
 	uint32_t nvars;          // constant number of instance variables
 
+	uint32_t *vsids;
+	void reg(lit a);
+
 	lit next_decision() const;
 	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *, unsigned long *) const;
 	void add_clause0(std::vector<lit> &);
 	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
+	int32_t resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
+
+	void vacuum();
 
 	void deref(const clause_proxy &p, lit *tmp, const lit **start, const lit **end) const
 	{
 		if (is_ptr(p)) {
 			const clause &cp = db[p.ptr];
+			*start = cp.begin();
+			*end = cp.end();
+		} else {
+			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
+			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
+			*start = tmp;
+			*end = tmp+2;
+		}
+	}
+
+	void deref(const clause_proxy &p, lit *tmp, lit **start, lit **end) const
+	{
+		if (is_ptr(p)) {
+			clause &cp = db[p.ptr];
 			*start = cp.begin();
 			*end = cp.end();
 		} else {

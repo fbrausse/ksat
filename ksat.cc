@@ -22,7 +22,7 @@ clause_db::chunk::chunk(chunk &&o)
 
 clause_db::chunk::~chunk()
 {
-	delete[] v;
+	if (v) delete[] v;
 }
 
 clause & clause_db::chunk::operator[](uint32_t off) const
@@ -56,6 +56,7 @@ clause_ptr clause_db::add(uint32_t size, bool learnt)
 	struct clause &cl = (*this)[ptr];
 	cl.header.size = size;
 	cl.header.learnt = learnt;
+	cl.header.remove = 0;
 	return ptr;
 }
 
@@ -68,6 +69,7 @@ ksat::~ksat()
 {
 	delete[] vars;
 	delete[] watches;
+	delete[] vsids;
 }
 
 void ksat::init(uint32_t nvars)
@@ -77,6 +79,66 @@ void ksat::init(uint32_t nvars)
 	watches = new vec<watch>[2*nvars];
 	//assigns.init(nvars);
 	units.reserve(nvars);
+	vsids = new uint32_t[2*nvars];
+	memset(vsids, 0, sizeof(uint32_t)*2*nvars);
+}
+
+void ksat::vacuum()
+{
+	uint32_t n = decisions.empty() ? units.size() : decisions.front();
+	clause_db ndb;
+	for (uint32_t i=0; i<2*nvars; i++) {
+		vec<watch> &ww = watches[i];
+		for (uint32_t j=0; j<ww.size(); j++) {
+			watch &w = ww[j];
+			clause *c = nullptr;
+			if (is_ptr(w.this_cl))
+				c = &db[w.this_cl.ptr];
+			if (is_ptr(w.this_cl) && db[w.this_cl.ptr].header.remove) {
+				memcpy((void *)&w.this_cl, c->l, sizeof(w.this_cl));
+				continue;
+			}
+			lit tmp[2];
+			lit *a, *b;
+			deref(w.this_cl, tmp, &a, &b);
+			uint32_t open = 0;
+			bool sat = false;
+			for (uint32_t k=0; !sat && a+k<b; k++)
+				if (!vars[var(a[k])].have() ||
+				    vars[var(a[k])].trail_pos_plus1 > n)
+					a[open++] = a[k];
+				else if (vars[var(a[k])].value == sign(a[k]))
+					sat = true;
+			assert(sat || open >= 2);
+			if (sat) {
+				w = ww.back();
+				ww.pop_back();
+				j--;
+				continue;
+			} else if (open == 2) {
+				w.this_cl.l[0] = a[0] | CLAUSE_PROXY_BIN_MASK;
+				w.this_cl.l[1] = a[1] | CLAUSE_PROXY_BIN_MASK;
+			} else {
+				w.this_cl.ptr = ndb.add(open, db[w.this_cl.ptr].header.learnt);
+				memcpy(ndb[w.this_cl.ptr].l, a, open*sizeof(lit));
+			}
+			if (c) {
+				c->header.remove = 1;
+				memcpy(c->l, (void *)&w.this_cl, sizeof(w.this_cl));
+			}
+		}
+	}
+	db.~clause_db();
+	new (&db) clause_db(std::move(ndb));
+}
+
+void ksat::reg(lit a)
+{
+	if (!++vsids[a]) {
+		for (uint32_t i=0; i<2*nvars; i++)
+			vsids[i] = (vsids[i]+1)>>1;
+		vsids[a] = 1U << 31;
+	}
 }
 
 const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt)
@@ -106,9 +168,18 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 
 lit ksat::next_decision() const
 {
+#if 1
+	int32_t max = -1;
+	for (uint32_t v=0; v<2*nvars; v++)
+		if (!vars[var({v})].have() && (max < 0 || vsids[max] < vsids[v]))
+			max = v;
+	if (max >= 0)
+		return {(uint32_t)max};
+#else
 	for (uint32_t v=0; v<nvars; v++)
 		if (!vars[v].have())
 			return {2*v+!vars[v].value};
+#endif
 	return {2*nvars};
 }
 
@@ -149,7 +220,7 @@ int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measure
 	l = lit2tp(l);
 	goto in;
 	while (v[1].size() > 1) {
-#if 1
+#if 0
 		fprintf(stderr, "dl %zu:%u resolve1:", decisions.size(), decisions.back());
 		for (int i=1; i>=0; i--) {
 			fprintf(stderr, " %zu:", v[i].size());
@@ -173,7 +244,7 @@ int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measure
 		}
 		if (v[1].size() == 1)
 			break;
-		else if (0 && v[0].size() > 16*decisions.size()) {
+		else if (0 && v[1].size() > decisions.size()) {
 			v[1].clear();
 			return -1;
 		}
@@ -182,7 +253,7 @@ int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measure
 		v[1].pop_back();
 in:
 		deref(units[var(l)-1].this_cl, clp, &a, &b);
-#if 1
+#if 0
 		fprintf(stderr, "dl %zu:%u resolve2:", decisions.size(), decisions.back());
 		for (unsigned i=0; a+i<b; i++)
 			fprintf(stderr, " %ld[%u]", lit_to_dimacs(a[i]), vars[var(a[i])].trail_pos_plus1-1);
@@ -194,7 +265,7 @@ in:
 				v[1].push_back(lit2tp(*a));
 			else
 				v[0].push_back(*a);
-#if 1
+#if 0
 		fprintf(stderr, "dl %zu:%u resolved to", decisions.size(), decisions.back());
 		for (int i=1; i>=0; i--) {
 			fprintf(stderr, " %zu:", v[i].size());
@@ -203,6 +274,10 @@ in:
 		}
 		fprintf(stderr, "\n");
 #endif
+		if (!(m.n & 0x3ff)) {
+			fprintf(stderr, "%8lu %8zu %8zu        \r", m.n, v[1].size(), v[0].size());
+			fflush(stderr);
+		}
 		m.tick();
 	}
 	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 descending */
@@ -216,6 +291,65 @@ in:
 	for (dec=decisions.size(); dec>0; dec--)
 		if (max_tp1 > decisions[dec-1])
 			break;
+	return dec;
+}
+
+struct bitset {
+
+	static constexpr size_t word_bits() { return sizeof(unsigned long)*CHAR_BIT; }
+
+	vec<unsigned long> v;
+
+	explicit bitset(uint32_t n) : v((n+word_bits()-1)/word_bits()) {}
+
+	void set(uint32_t p) { v[p/word_bits()] |= 1UL << (p%word_bits()); }
+	void unset(uint32_t p) { v[p/word_bits()] &= ~1UL << (p%word_bits()); }
+	bool get(uint32_t p) const { return v[p/word_bits()] & (1UL << (p%word_bits())); }
+	int32_t max_bit() const
+	{
+		for (int32_t i=v.size(); i; i--)
+			if (v[i-1])
+				return i * word_bits() - (BSR(v[i-1])+1);
+		return -1;
+	}
+};
+
+int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
+{
+	auto tp = [this](lit l){ return vars[var(l)].trail_pos_plus1-1; };
+	auto td = [tp,k=decisions.back()](lit l){ return tp(l) >= k; };
+
+	lit tmp[2];
+	const lit *a, *b;
+	bitset avail(unit_ptr+1);
+	deref(w->this_cl, tmp, &a, &b);
+	for (; a<b; a++)
+		avail.set(tp(*a));
+	int32_t p, q = avail.max_bit();
+	while (1) {
+		p = q;
+		assert(td({p}));
+		avail.unset(p);
+		if (!td({q = avail.max_bit()}))
+			break;
+		deref(units[p].this_cl, tmp, &a, &b);
+		for (; a<b; a++)
+			if (tp(*a) != p) {
+				assert(tp(*a) < p);
+				avail.set(tp(*a));
+			}
+	}
+	v[1].clear();
+	int32_t dec = -1;
+	for (unsigned i=0; (p = avail.max_bit()) >= 0; i++) {
+		if (i == 1)
+			for (dec=decisions.size(); dec>0; dec--)
+				if (p >= decisions[dec-1])
+					break;
+		v[1].push_back(~units[p].implied_lit);
+		avail.unset(p);
+	}
+	assert(dec >= 0);
 	return dec;
 }
 
@@ -254,26 +388,33 @@ int ksat::run()
 	timer t;
 	t.start();
 	int r = 0;
-	uint32_t learnt_lits = 0;
+	unsigned long learnt_lits = 0;
 	unsigned long last_out = 0;
+	unsigned long restarts = 0;
+	auto stats = [&]{
+		last_out = t.get();
+		uint32_t n = 0;
+		for (const auto &c : db.chunks)
+			n += c.valid;
+		double s = t.get()/1e6;
+		uint32_t fixed = decisions.empty() ? units.size() : decisions.front();
+		fprintf(stderr,
+		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
+		        "decs: %lu (%.1f/s), props: %lu (%.4g/s) %.1fs, res: %lu (%.4g/s) %.1fs, cl db: %u MiB\n",
+		        s, fixed, nvars-fixed,
+		        conflicts, conflicts/s, restarts,
+		        learnt, 10*learnt_lits/conflicts*.1,
+		        n_decisions, n_decisions/s,
+		        propagations, propagations/(pt/1e6), pt/1e6,
+		        resolutions, resolutions/(rt/1e6), rt/1e6,
+		        n>>(20-2));
+	};
+	bool do_vacuum = true;
 	while (1) {
 		while (const watch *w = propagate_units(&propagations, &pt)) {
 			++conflicts;
-			if (t.get()-last_out > 1000000) {
-				last_out = t.get();
-				uint32_t n = 0;
-				for (const auto &c : db.chunks)
-					n += c.valid;
-				double s = t.get()/1e6;
-				fprintf(stderr, "time: %.1fs, confl: %lu (%.1f/s), learnt: %lu avg. sz: %.1f lits, decs: %lu (%.1f/s), props: %lu (%.4g/s), res: %lu (%.4g/s), cl db: %u MiB\n",
-					s,
-					conflicts, conflicts/s,
-					learnt, 10*learnt_lits/conflicts*.1,
-					n_decisions, n_decisions/s,
-					propagations, propagations/(pt/1e6),
-					resolutions, resolutions/(rt/1e6),
-					n>>(20-2));
-			}
+			if (t.get()-last_out > 1000000)
+				stats();
 			if (decisions.empty()) {
 				unsat = true;
 				r = 20;
@@ -283,6 +424,18 @@ int ksat::run()
 			learnt_lits += cl[1].size();
 			trackback(decision_level);
 			add_clause0(cl[1]);
+			if (!(conflicts & 0xff)) {
+				if (decision_level)
+					trackback(0);
+				do_vacuum = true;
+				restarts++;
+				for (uint32_t i=0; i<2*nvars; i++)
+					vsids[i] = (vsids[i] + 1) >> 1;
+			}
+		}
+		if (do_vacuum) {
+			vacuum();
+			do_vacuum = false;
 		}
 		lit d = next_decision();
 		if (var(d) >= nvars) {
@@ -296,8 +449,8 @@ int ksat::run()
 		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
 	}
 done:
-	fprintf(stderr, "time: %luus, conflicts: %lu, decisions: %lu, propagations: %lu, resolutions: %lu\n",
-	        t.get(), conflicts, n_decisions, propagations, resolutions);
+	stats();
+	fprintf(stderr, "%s\n", r == 10 ? "SAT" : r == 20 ? "UNSAT" : "INDET");
 	return r;
 }
 
@@ -421,6 +574,8 @@ void ksat::add_clause0(vector<lit> &cl)
 			unsat = true;
 		return;
 	}
+	for (lit l : cl)
+		reg(l);
 	assert(j == 1);
 	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
@@ -471,6 +626,8 @@ void ksat::add_clause(vector<lit> &c)
 			sat |= vars[var(c[i])].value == sign(c[i]);
 	if (c.size() >= 2) {
 		clause_proxy p;
+		for (lit l : c)
+			reg(l);
 		if (c.size() == 2) {
 			p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
 			p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
