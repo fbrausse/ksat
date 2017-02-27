@@ -20,11 +20,6 @@ clause_db::chunk::chunk(chunk &&o)
 : size(o.size), valid(o.valid), v(o.v)
 { o.v = nullptr; }
 
-clause_db::chunk::~chunk()
-{
-	if (v) delete[] v;
-}
-
 clause & clause_db::chunk::operator[](uint32_t off) const
 {
 	return *reinterpret_cast<clause *>(v + off);
@@ -140,7 +135,7 @@ void ksat::vacuum()
 	new (&db) clause_db(std::move(ndb));
 }
 
-void ksat::reg(lit a)
+void ksat::reg(lit a) const
 {
 	if (!++vsids[a]) {
 		for (uint32_t i=0; i<2*nvars; i++)
@@ -402,7 +397,7 @@ int ksat::run()
 		        "decs: %lu (%.1f/s), props: %lu (%.4g/s) %.1fs, res: %lu (%.4g/s) %.1fs, cl db: %u MiB\n",
 		        s, fixed, nvars-fixed,
 		        conflicts, conflicts/s, restarts,
-		        learnt, 10*learnt_lits/conflicts*.1,
+		        learnt, 10*learnt_lits/(conflicts+1)*.1,
 		        n_decisions, n_decisions/s,
 		        propagations, propagations/(pt/1e6), pt/1e6,
 		        resolutions, resolutions/(rt/1e6), rt/1e6,
@@ -412,15 +407,19 @@ int ksat::run()
 	luby_seq luby(1 << 6);
 	unsigned long next_restart = luby();
 	unsigned long last_vacuum = 0;
+	unsigned long last_vsids_adj = 0;
 	while (1) {
-		while (const watch *w = propagate_units(&propagations, &pt)) {
+		if (t.get()-last_out > 1000000)
+			stats();
+		if (const watch *w = propagate_units(&propagations, &pt)) {
 			++conflicts;
-			if (t.get()-last_out > 1000000)
-				stats();
 			if (decisions.empty()) {
 				unsat = true;
 				r = 20;
-				goto done;
+				break;
+			}
+			if ((learnt_lits - last_vsids_adj)/(float)(nvars-decisions.front()) > .25f) {
+				last_vsids_adj = learnt_lits;
 			}
 			uint32_t decision_level = analyze(w, cl, &learnt, &resolutions, &rt);
 			learnt_lits += cl[1].size();
@@ -435,6 +434,7 @@ int ksat::run()
 				for (uint32_t i=0; i<2*nvars; i++)
 					vsids[i] = (vsids[i] + 1) >> 1;
 			}
+			continue;
 		}
 		if (do_vacuum) {
 			vacuum();
@@ -444,7 +444,7 @@ int ksat::run()
 		lit d = next_decision();
 		if (var(d) >= nvars) {
 			r = 10;
-			goto done;
+			break;
 		}
 		n_decisions++;
 		// fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
@@ -452,7 +452,6 @@ int ksat::run()
 		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
 		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
 	}
-done:
 	stats();
 	fprintf(stderr, "%s\n", r == 10 ? "SAT" : r == 20 ? "UNSAT" : "INDET");
 	return r;

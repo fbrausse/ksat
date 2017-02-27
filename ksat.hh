@@ -57,6 +57,9 @@ struct clause {
 	const lit * cend()   const { return l + header.size; }
 };
 
+#define LIT_SPARE_BIT		((uint32_t)1 << 31)
+#define CLAUSE_PROXY_BIN_MASK	LIT_SPARE_BIT
+
 /* a clause_ptr has the same size as two literals, so in case of binary clauses,
  * which are stored solely in the watch list, use the pointer itself to store
  * the literals of the binary clause. */
@@ -64,11 +67,13 @@ union clause_proxy {
 	uint32_t l[2];
 	clause_ptr ptr;
 
+	unsigned spare() /* 2 bits: 4 states: 11: !is_ptr; xy: unused */
+	{
+		return !!(l[0] & CLAUSE_PROXY_BIN_MASK) << 1 |
+		       !!(l[1] & CLAUSE_PROXY_BIN_MASK) << 0;
+	}
 	explicit operator bool() const;
 };
-
-#define LIT_SPARE_BIT		((uint32_t)1 << 31)
-#define CLAUSE_PROXY_BIN_MASK	LIT_SPARE_BIT
 
 static inline bool is_ptr(const clause_proxy &p)
 {
@@ -80,6 +85,12 @@ inline clause_proxy::operator bool() const { return !is_ptr(*this) || ptr; }
 struct watch {
 	clause_proxy this_cl;
 	lit implied_lit;
+
+	unsigned spare() /* 3 bits; 6 states: 11z: !is_ptr(this_cl); xyz: unused */
+	{
+		return this_cl.spare() << 1 |
+		       !!(implied_lit & LIT_SPARE_BIT) << 0;
+	}
 };
 
 struct clause_db {
@@ -92,9 +103,10 @@ struct clause_db {
 		explicit chunk(uint32_t sz);
 		chunk(const chunk &) = delete;
 		chunk(chunk &&);
-		~chunk();
+		~chunk() { clear(); }
 		clause & operator[](uint32_t off) const;
 		chunk & operator=(chunk) = delete;
+		void clear() { delete[] v; v = nullptr; }
 	};
 
 	struct iterator {
@@ -255,8 +267,8 @@ class ksat {
 
 	uint32_t nvars;          // constant number of instance variables
 
-	uint32_t *vsids;
-	void reg(lit a);
+	mutable uint32_t *vsids;
+	void reg(lit a) const;
 
 	mutable bitset avail;
 
