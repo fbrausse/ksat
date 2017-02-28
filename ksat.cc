@@ -167,10 +167,12 @@ void ksat::dec_all() const
 const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt)
 {
 	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
-	const watch *w = nullptr;
+	const watch *rw = nullptr;
 	unsigned long up = unit_ptr;
 	timer t;
-	auto propagate_single = [this](lit l) -> const watch * {
+	t.start();
+	for (; unit_ptr < units.size(); unit_ptr++) {
+		lit l = units[unit_ptr].implied_lit;
 		vec<watch> &wnl = watches[~l];
 		for (unsigned i=0; i<wnl.size(); i++) {
 			watch &w = wnl[i];
@@ -213,15 +215,17 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 							break;
 						}
 
-					goto done;
+					continue;
 				}
 			}
-			if (v_implied.have())
-				return &w;
+			if (v_implied.have()) {
+				rw = &w;
+				break;
+			}
 			units.emplace_back(w);
 			v_implied = var_desc{sign(implied),(uint32_t)units.size()};
-		done:;
-		/*
+
+			/*
 			if (clause satisfied through w2)
 				continue;
 			else if (exists k assigned true in clause)
@@ -233,18 +237,11 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 				enqueue unit k
 			else
 				conflict clause
-		*/
+			*/
 		}
-		return nullptr;
-	};
-	t.start();
-	for (; unit_ptr < units.size(); unit_ptr++) {
-		w = propagate_single(units[unit_ptr].implied_lit);
-		if (w)
-			break;
 	}
 	unsigned long us = t.get();
-	unsigned long n = (unit_ptr-up) + (w != nullptr);
+	unsigned long n = (unit_ptr-up) + (rw != nullptr);
 	*propagations += n;
 	*pt += us;
 #if 0
@@ -253,7 +250,7 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 	        decisions.empty() ? 0 : lit_to_dimacs(units[decisions.back()].implied_lit),
 	        decisions.empty() ? 0 : decisions.back(), n, t.get(), n/(us/1e6));
 #endif
-	return w;
+	return rw;
 }
 
 lit ksat::next_decision() const
@@ -525,11 +522,11 @@ int ksat::run()
 		uint32_t fixed = decisions.empty() ? units.size() : decisions.front();
 		fprintf(stderr,
 		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
-		        "decs: %lu (%.1f/s) %.1fs, props: %lu (%.4g/s) %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
+		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
 		        s, fixed, nvars-fixed,
 		        conflicts, conflicts/s, restarts,
 		        learnt, 10*learnt_lits/(conflicts+1)*.1,
-		        n_decisions, n_decisions/s, dt/1e6,
+		        n_decisions, n_decisions/s, dt/1e6, decisions.size(),
 		        propagations, propagations/(pt/1e6), pt/1e6,
 		        resolutions, resolutions/(rt/1e6), rt/1e6,
 		        tt/1e6,
