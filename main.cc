@@ -167,6 +167,7 @@ int main(int argc, char **argv)
 			fprintf(stderr, "\n\
 Options:\n\
   -d FILE     dump (pre-)processed instance clauses to FILE\n\
+  -D FILE     dump decision variables used into FILE\n\
   -h          display this help message\n\
   -r SEED     initialize random seed by SEED\n\
   -v          increase verbosity\n\

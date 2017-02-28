@@ -201,12 +201,14 @@ public:
 };
 
 template <typename V, typename Le>
-void bin_heap_sift_up(V &v, uint32_t i, Le le)
+uint32_t bin_heap_sift_up(V &v, uint32_t i, Le le)
 {
+	using std::swap;
 	while (i && !le(v[i / 2], v[i])) {
 		swap(v[i / 2], v[i]);
 		i = i / 2;
 	}
+	return i;
 }
 #if 0
 template <typename V, typename Le>

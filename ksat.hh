@@ -4,6 +4,7 @@
 
 #include "common.h"
 
+#include <cassert>
 #include <cstdlib>	/* abs() */
 #include <cinttypes>	/* uint32_t */
 #include <vector>
@@ -241,7 +242,92 @@ struct bitset {
 				return i * word_bits() - (BSR(v[i-1])+1);
 		return -1;
 	}
+	int32_t max_bit(uint32_t hint) const
+	{
+		for (int32_t i=hint/word_bits()+1; i; i--)
+			if (v[i-1])
+				return i * word_bits() - (BSR(v[i-1])+1);
+		return -1;
+	}
 	void resize(uint32_t n) { v.resize((n+word_bits()-1)/word_bits()); }
+};
+
+struct bin_inv_heap {
+
+	const uint32_t *keys;
+	uint32_t *paeh; /* mapping var -> heap index */
+	uint32_t *heap; /* mapping heap index -> var */
+	uint32_t n, valid;
+
+	explicit bin_inv_heap(const uint32_t *keys, uint32_t n)
+	: keys(keys), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
+	{
+		for (uint32_t i=0; i<n; i++)
+			heap[i] = paeh[i] = i;
+	}
+
+	~bin_inv_heap()
+	{
+		delete[] paeh;
+		delete[] heap;
+	}
+
+	void swap(uint32_t &va, uint32_t &vb)
+	{
+		std::swap(paeh[va], paeh[vb]);
+		std::swap(va, vb);
+	}
+
+	uint32_t pop()
+	{
+		uint32_t r = heap[0];
+		swap(heap[0], heap[--valid]);
+		sift_down(0);
+		return r;
+	}
+
+	bool le(uint32_t a, uint32_t b) const
+	{
+		return keys[a] > keys[b];
+	}
+
+	void sift_down(uint32_t i)
+	{
+		while (true) {
+			uint32_t c = i;
+			if (2*i+1 < valid && !le(heap[c], heap[2*i+1]))
+				c = 2*i+1;
+			if (2*i+2 < valid && !le(heap[c], heap[2*i+2]))
+				c = 2*i+2;
+			if (i == c)
+				break;
+			swap(heap[i], heap[c]);
+			i = c;
+		}
+	}
+
+	void sift_up(uint32_t i)
+	{
+		while (i && !le(heap[i/2], heap[i])) {
+			swap(heap[i/2], heap[i]);
+			i = i/2;
+		}
+	}
+
+	void build()
+	{
+		for (uint32_t i=valid/2; i; i--)
+			sift_down(i-1);
+	}
+
+	uint32_t idx(uint32_t v) const { return paeh[v]; }
+
+	void restore(uint32_t nvalid)
+	{
+		assert(nvalid >= valid);
+		valid = nvalid;
+		build();
+	}
 };
 
 class ksat {
@@ -267,8 +353,13 @@ class ksat {
 
 	uint32_t nvars;          // constant number of instance variables
 
+	std::vector<uint32_t> lit_heap_valid;
+	mutable bin_inv_heap *lit_heap = nullptr;
+	mutable uint32_t *active;
+	mutable uint32_t n_active;
 	mutable uint32_t *vsids;
 	void reg(lit a) const;
+	void dec_all() const;
 
 	mutable bitset avail;
 
@@ -354,7 +445,6 @@ class ksat {
 		bool operator!=(const bin_cl_itr &o) const { return !(*this == o); }
 	};
 
-	const watch * propagate_single(lit l);
 	const watch * propagate_units(unsigned long *, unsigned long *);
 
 public:
