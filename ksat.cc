@@ -493,6 +493,7 @@ in:
 	return dec;
 }
 
+template <bool use_merge_res>
 int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
 	const int32_t n = decisions.back();
@@ -509,14 +510,22 @@ int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measur
 		assert(vars[var(*a)].value != sign(*a));
 		avail.set(tp(*a));
 	}
-	int32_t p = avail.max_bit();
+	int32_t p = avail.max_bit(), q;
+	bool have_merged_lit = false;
+	bool is_merge_res = false;
 	while (1) {
 		assert(p >= n);
 		avail.unset(p);
-		int32_t q = avail.max_bit(p);
+		q = avail.max_bit(p);
 //		fprintf(stderr, "unset %u, next q: %d\n", p, q);
-		if (q < n)
+		if (q < n) {
+			is_merge_res = false;
 			break;
+		}
+		if (use_merge_res && have_merged_lit && avail.bitcount(n,q) <= 2 - 2 /* -2: p and q on conflict level*/) {
+			is_merge_res = true;
+			break;
+		}
 		deref(units[p].this_cl, tmp, &a, &b);
 //		reg(l);
 		for (; a<b; a++) {
@@ -526,6 +535,8 @@ int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measur
 			assert(tp(*a) < p);
 			if (tp(*a) > q)
 				q = tp(*a);
+			if (use_merge_res && tp(*a) >= n && !have_merged_lit)
+				have_merged_lit = avail.get(tp(*a));
 //			reg(*a);
 			avail.set(tp(*a));
 		}
@@ -536,13 +547,18 @@ int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measur
 	v[1].clear();
 	v[1].push_back(~units[p].implied_lit);
 	int32_t dec = 0;
-	for (unsigned i=1; (p = avail.max_bit()) >= 0; i++) {
-		if (i == 1)
+	for (uint32_t i=1, r; (int32_t)(r = avail.max_bit()) >= 0; i++) {
+		assert(r < n || (i == 1 && is_merge_res));
+		if (i == (is_merge_res ? 2 : 1))
 			for (dec=decisions.size(); dec>0; dec--)
-				if ((uint32_t)p >= decisions[dec-1])
+				if (r >= decisions[dec-1])
 					break;
-		v[1].push_back(~units[p].implied_lit);
-		avail.unset(p);
+		//if (i >= (is_merge_res ? 2 : 1))
+		//	assert(p < n);
+		//else
+		//	assert(p >= n);
+		v[1].push_back(~units[r].implied_lit);
+		avail.unset(r);
 	}
 	assert(dec >= 0);
 	return dec;
@@ -555,7 +571,10 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learn
 	m.start();
 
 	//if ((nvars-decisions.front())/(unit_ptr+1-decisions.back()) > decisions.size())
-	dec = resolve_conflict2(w, v, m);
+	if (1)
+		dec = resolve_conflict2<true>(w, v, m);
+	else
+		dec = resolve_conflict2<false>(w, v, m);
 
 	m.stop();
 	*resolutions += m.n;
@@ -713,16 +732,22 @@ void ksat::add_clause0(vector<lit> &cl)
 #endif
 	if (cl.size() < 2) {
 		assert(decisions.empty());
-		if (cl.size() == 0 || !add_unit(cl[0]))
+		if (cl.size() == 0 || (assert(j == 1), !add_unit(cl[0])))
 			unsat = true;
 		return;
 	}
 	for (lit l : cl)
 		reg(l);
-	assert(j == 1);
 	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
 #if 1
+	#if 1
+	for (unsigned k=2; k<cl.size(); k++)
+		if (vars[var(cl[k-1])].have()) {
+			assert(vars[var(cl[k])].have());
+			assert(vars[var(cl[k])].trail_pos_plus1 < vars[var(cl[k-1])].trail_pos_plus1);
+		}
+	#else
 	unsigned w = 1;
 	for (unsigned k=2; k<cl.size(); k++)
 		if (vars[var(cl[k])].trail_pos_plus1 >
@@ -731,6 +756,7 @@ void ksat::add_clause0(vector<lit> &cl)
 			w = k;
 		}
 	swap(cl[1], cl[w]);
+	#endif
 #endif
 	if (cl.size() == 2) {
 		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;

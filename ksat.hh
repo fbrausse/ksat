@@ -278,6 +278,22 @@ struct bitset {
 		return -1;
 	}
 	void resize(uint32_t n) { v.resize((n+word_bits()-1)/word_bits()); }
+
+	uint32_t bitcount(uint32_t a, uint32_t b)
+	{
+		uint32_t r = 0;
+		uint32_t lo = a/word_bits();
+		uint32_t hi = (b+word_bits()-1)/word_bits();
+		for (uint32_t i=lo; i<std::min((uint32_t)v.size(), hi); i++) {
+			unsigned long w = v[i];
+			if (i == lo)
+				w &= ~0UL << (a % word_bits());
+			if (i == b/word_bits())
+				w &= ~(~0UL << (b % word_bits()));
+			r += __builtin_popcountl(w);
+		}
+		return r;
+	}
 };
 
 struct bin_inv_heap {
@@ -395,6 +411,7 @@ class ksat {
 	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *, unsigned long *) const;
 	void add_clause0(std::vector<lit> &);
 	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
+	template <bool>
 	int32_t resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	void trackback(uint32_t dlevel);
 
