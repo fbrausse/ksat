@@ -88,55 +88,73 @@ void ksat::init(uint32_t nvars)
 
 void ksat::vacuum()
 {
+	assert(decisions.empty());
 	uint32_t n = decisions.empty() ? units.size() : decisions.front();
-	clause_db ndb;
 	measurement m;
 	m.start();
 	uint32_t del_w = 0, del_db = 0;
+#if 1
+	clause_db ndb;
 	for (uint32_t i=0; i<2*nvars; i++) {
 		vec<watch> &ww = watches[i];
 		for (uint32_t j=0; j<ww.size(); j++) {
 			m.tick();
 			watch &w = ww[j];
 			clause *c = nullptr;
+			lit tmp[2];
+			lit *a, *b;
 			if (is_ptr(w.this_cl))
 				c = &db[w.this_cl.ptr];
 			if (is_ptr(w.this_cl) && db[w.this_cl.ptr].header.remove) {
 				memcpy((void *)&w.this_cl, c->l, sizeof(w.this_cl));
-				continue;
-			}
-			lit tmp[2];
-			lit *a, *b;
-			deref(w.this_cl, tmp, &a, &b);
-			uint32_t open = 0;
-			bool sat = false;
-			for (uint32_t k=0; !sat && a+k<b; k++)
-				if (!vars[var(a[k])].have() ||
-				    vars[var(a[k])].trail_pos_plus1 > n)
-					a[open++] = a[k];
-				else if (vars[var(a[k])].value == sign(a[k]))
-					sat = true;
-			assert(sat || open >= 2);
-			if (sat) {
-				w = ww.back();
-				ww.pop_back();
-				j--;
-				del_w++;
-				continue;
-			} else if (open == 2) {
-				w.this_cl.l[0] = a[0] | CLAUSE_PROXY_BIN_MASK;
-				w.this_cl.l[1] = a[1] | CLAUSE_PROXY_BIN_MASK;
+				c = nullptr;
+				ndb.deref(w.this_cl, tmp, &a, &b);
 			} else {
-				w.this_cl.ptr = ndb.add(open, db[w.this_cl.ptr].header.learnt);
-				memcpy(ndb[w.this_cl.ptr].l, a, open*sizeof(lit));
+				db.deref(w.this_cl, tmp, &a, &b);
+				uint32_t open = 0;
+				bool sat = false;
+				for (uint32_t k=0; !sat && a+k<b; k++) {
+					const var_desc &vk = vars[var(a[k])];
+					if (!vk.have())
+						a[open++] = a[k];
+					else if (assert(vk.trail_pos_plus1 <= n), vk.value == sign(a[k]))
+						sat = true;
+					//else
+					//	a[open++] = a[k];
+				}
+				assert(sat || open >= 2);
+				if (sat) {
+					w = ww.back();
+					ww.pop_back();
+					j--;
+					del_db += b-a > 2 ? (b-a)+1 : 0;
+					del_w++;
+					continue;
+				} else if (open == 2) {
+					w.this_cl.l[0] = a[0] | CLAUSE_PROXY_BIN_MASK;
+					w.this_cl.l[1] = a[1] | CLAUSE_PROXY_BIN_MASK;
+				} else {
+					w.this_cl.ptr = ndb.add(open, db[w.this_cl.ptr].header.learnt);
+					memcpy(ndb[w.this_cl.ptr].l, a, open*sizeof(lit));
+				}
+			}
+			assert(a[0] == i || a[1] == i);
+			if (vars[var(w.implied_lit)].have()) {
+				// argh.... this_cl.ptr is wrong
+				w.implied_lit = a[0] == i ? a[1] : a[0];
+				//watches[w.implied_lit].push_back({w.implied_lit < i ? w.this_cl : save,i});
+				assert(!vars[var(w.implied_lit)].have());
 			}
 			if (c) {
-				del_db += open == 2 ? c->header.size+1 : (c->header.size - open);
+				del_db += is_ptr(w.this_cl) ? c->header.size - ndb[w.this_cl.ptr].header.size : (c->header.size+1);
 				c->header.remove = 1;
 				memcpy(c->l, (void *)&w.this_cl, sizeof(w.this_cl));
 			}
 		}
 	}
+	db.~clause_db();
+	new (&db) clause_db(std::move(ndb));
+#endif
 	for (uint32_t v=0; v<n_active; v++) {
 		uint32_t w = active[v];
 		if (vars[w].have() && vars[w].trail_pos_plus1 <= n)
@@ -144,8 +162,6 @@ void ksat::vacuum()
 	}
 	m.stop();
 	fprintf(stderr, "vacuum del %u watches, %u large-cl lits (%lu steps in %luus -> %g/s)\n", del_w, del_db, m.n, m.t, m.n/(m.t/1e6));
-	db.~clause_db();
-	new (&db) clause_db(std::move(ndb));
 }
 
 void ksat::reg(lit a) const
@@ -164,25 +180,50 @@ void ksat::dec_all() const
 		vsids[i] = (vsids[i]+1)>>1;
 }
 
-const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt)
+const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt, unsigned long *wft)
 {
 	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
 	const watch *rw = nullptr;
 	unsigned long up = unit_ptr;
-	timer t;
+	timer t, tt;
 	t.start();
 	for (; unit_ptr < units.size(); unit_ptr++) {
 		lit l = units[unit_ptr].implied_lit;
 		vec<watch> &wnl = watches[~l];
 		for (unsigned i=0; i<wnl.size(); i++) {
 			watch &w = wnl[i];
-			lit implied = w.implied_lit;
-			var_desc &v_implied = vars[var(implied)];
-			if (v_implied.have() && v_implied.value == sign(implied))
+			lit &implied = w.implied_lit;
+			if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied))
 				continue;
 			if (is_ptr(w.this_cl)) {
 				clause_ptr cl_ptr = w.this_cl.ptr;
 				clause &c = db[cl_ptr];
+			#if 1
+				if (c.l[0] == ~l)
+					c.l[0] = c.l[1], c.l[1] = ~l;
+				implied = c.l[0];
+				if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied)) {
+					// clause already satisfied
+					continue;
+				}
+				unsigned j;
+				for (j=2; j<c.header.size; j++) {
+					lit k = c.l[j];
+					const var_desc &vk = vars[var(k)];
+					if (!vk.have() || vk.value == sign(k))
+						break;
+				}
+				if (j < c.header.size) {
+					lit k = c.l[j];
+					c.l[1] = k;
+					c.l[j] = ~l;
+					watches[k].push_back(w);
+					w = wnl.back();
+					wnl.pop_back();
+					i--;
+					continue;
+				}
+			#else
 				unsigned j_true = 0, j_undef = 0;
 				for (unsigned j=2; j<c.header.size && !j_true; j++) {
 					lit k = c.l[j];
@@ -208,22 +249,50 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 
 					i--;
 
+					tt.start();
 					for (watch &v : watches[implied])
 						if (cl_ptr == v.this_cl.ptr) {
 							assert(v.implied_lit == ~l);
 							v.implied_lit = k;
 							break;
 						}
+					*wft += tt.get();
 
 					continue;
 				}
+			#endif
 			}
-			if (v_implied.have()) {
+			//if (v_implied.have()) {
+			if (vars[var(implied)].have()) {
+				assert(vars[var(implied)].value != sign(implied));
+				lit tmp[2];
+				const lit *a, *b;
+				deref(w.this_cl, tmp, &a, &b);
+				for (; a<b; a++)
+					assert(vars[var(*a)].have() && vars[var(*a)].value != sign(*a));
+				// other watched lit set to false
 				rw = &w;
 				break;
 			}
+			{
+				lit tmp[2];
+				const lit *a, *b;
+				unsigned unset = 0, pos = 0, neg = 0, total = 0;
+				deref(w.this_cl, tmp, &a, &b);
+				for (; a<b; a++, total++)
+					if (!vars[var(*a)].have()) {
+						assert(*a == implied);
+						unset++;
+					} else if (vars[var(*a)].value == sign(*a))
+						pos++;
+					else
+						neg++;
+				assert(unset == 1);
+				assert(pos + neg == total - 1);
+			}
 			units.emplace_back(w);
-			v_implied = var_desc{sign(implied),(uint32_t)units.size()};
+			assert(var(implied) != var(l));
+			vars[var(implied)] = var_desc{sign(implied),(uint32_t)units.size()};
 
 			/*
 			if (clause satisfied through w2)
@@ -306,8 +375,10 @@ lit ksat::next_decision() const
 
 void ksat::trackback(uint32_t dlevel) // to including dlevel
 {
+#if 0
 	for (uint32_t i=dlevel; i<decisions.size(); i++)
 		vars[var(units[decisions[i]].implied_lit)].value ^= 0;
+#endif
 	for (uint32_t i=decisions[dlevel]; i<units.size(); i++)
 		vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
 	if (lit_heap) {
@@ -434,6 +505,8 @@ int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measur
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
 //		reg(*a);
+		assert(vars[var(*a)].have());
+		assert(vars[var(*a)].value != sign(*a));
 		avail.set(tp(*a));
 	}
 	int32_t p = avail.max_bit();
@@ -446,17 +519,17 @@ int32_t ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measur
 			break;
 		deref(units[p].this_cl, tmp, &a, &b);
 //		reg(l);
-		int32_t r = tp(tp(a[0]) == p ? a[1] : a[0]);
-		avail.set(r);
-		for (a += 2; a<b; a++) {
+		for (; a<b; a++) {
+			if (tp(*a) == p)
+				continue;
 //			fprintf(stderr, "adding2 %u\n", tp(*a));
 			assert(tp(*a) < p);
-			if (tp(*a) > r)
-				r = tp(*a);
+			if (tp(*a) > q)
+				q = tp(*a);
 //			reg(*a);
 			avail.set(tp(*a));
 		}
-		p = r > q ? r : q;
+		p = q;
 		m.tick();
 	}
 	assert(p >= n);
@@ -506,7 +579,7 @@ int ksat::run()
 {
 	vector<lit> cl[2];
 	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0, learnt = 0;
-	unsigned long pt = 0, rt = 0, dt = 0, tt = 0;
+	unsigned long pt = 0, rt = 0, dt = 0, tt = 0, wft = 0;
 	timer t;
 	t.start();
 	int r = 0;
@@ -522,12 +595,12 @@ int ksat::run()
 		uint32_t fixed = decisions.empty() ? units.size() : decisions.front();
 		fprintf(stderr,
 		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
-		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
+		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
 		        s, fixed, nvars-fixed,
 		        conflicts, conflicts/s, restarts,
 		        learnt, 10*learnt_lits/(conflicts+1)*.1,
 		        n_decisions, n_decisions/s, dt/1e6, decisions.size(),
-		        propagations, propagations/(pt/1e6), pt/1e6,
+		        propagations, propagations/(pt/1e6), pt/1e6, wft/1e6,
 		        resolutions, resolutions/(rt/1e6), rt/1e6,
 		        tt/1e6,
 		        n>>(20-2));
@@ -541,7 +614,7 @@ int ksat::run()
 	while (1) {
 		if (t.get()-last_out > 1000000)
 			stats();
-		if (const watch *w = propagate_units(&propagations, &pt)) {
+		if (const watch *w = propagate_units(&propagations, &pt, &wft)) {
 			++conflicts;
 			if (decisions.empty()) {
 				unsat = true;
@@ -568,6 +641,7 @@ int ksat::run()
 			continue;
 		}
 		if (do_vacuum) {
+			assert(decisions.empty());
 			vacuum();
 			do_vacuum = false;
 			last_vacuum = units.size();
@@ -627,7 +701,7 @@ void ksat::add_clause0(vector<lit> &cl)
 		fprintf(stderr, " ...");
 	fprintf(stderr, "\n");
 #endif
-#if 0
+#if 1
 	for (unsigned i=0; j<2 && i<cl.size(); i++)
 		if (!vars[var(cl[i])].have()) {
 			assert(j == i);
@@ -648,7 +722,7 @@ void ksat::add_clause0(vector<lit> &cl)
 	assert(j == 1);
 	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
-#if 0
+#if 1
 	unsigned w = 1;
 	for (unsigned k=2; k<cl.size(); k++)
 		if (vars[var(cl[k])].trail_pos_plus1 >

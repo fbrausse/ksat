@@ -150,6 +150,34 @@ struct clause_db {
 
 	iterator begin() const { return iterator(*this, {0,1}); }
 	iterator end()   const { return iterator(*this, {(uint32_t)chunks.size(),0}); }
+
+	void deref(const clause_proxy &p, lit *tmp, const lit **start, const lit **end) const
+	{
+		if (is_ptr(p)) {
+			const clause &cp = (*this)[p.ptr];
+			*start = cp.begin();
+			*end = cp.end();
+		} else {
+			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
+			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
+			*start = tmp;
+			*end = tmp+2;
+		}
+	}
+
+	void deref(const clause_proxy &p, lit *tmp, lit **start, lit **end) const
+	{
+		if (is_ptr(p)) {
+			clause &cp = (*this)[p.ptr];
+			*start = cp.begin();
+			*end = cp.end();
+		} else {
+			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
+			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
+			*start = tmp;
+			*end = tmp+2;
+		}
+	}
 };
 
 struct assignments {
@@ -372,35 +400,9 @@ class ksat {
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
 
+	void deref(const clause_proxy &cp, lit *tmp, const lit **a, const lit **b) const { db.deref(cp, tmp, a, b); }
+
 	void vacuum();
-
-	void deref(const clause_proxy &p, lit *tmp, const lit **start, const lit **end) const
-	{
-		if (is_ptr(p)) {
-			const clause &cp = db[p.ptr];
-			*start = cp.begin();
-			*end = cp.end();
-		} else {
-			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
-			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
-			*start = tmp;
-			*end = tmp+2;
-		}
-	}
-
-	void deref(const clause_proxy &p, lit *tmp, lit **start, lit **end) const
-	{
-		if (is_ptr(p)) {
-			clause &cp = db[p.ptr];
-			*start = cp.begin();
-			*end = cp.end();
-		} else {
-			tmp[0] = {p.l[0] & ~CLAUSE_PROXY_BIN_MASK};
-			tmp[1] = {p.l[1] & ~CLAUSE_PROXY_BIN_MASK};
-			*start = tmp;
-			*end = tmp+2;
-		}
-	}
 
 	struct bin_cl_itr {
 
@@ -445,7 +447,7 @@ class ksat {
 		bool operator!=(const bin_cl_itr &o) const { return !(*this == o); }
 	};
 
-	const watch * propagate_units(unsigned long *, unsigned long *);
+	const watch * propagate_units(unsigned long *, unsigned long *, unsigned long *);
 
 public:
 	ksat(const ksat &) = delete;
