@@ -260,6 +260,8 @@ struct bitset {
 	bitset() {}
 	explicit bitset(uint32_t n) : v((n+word_bits()-1)/word_bits()) {}
 
+	void clear() { memset(v.data(), 0, sizeof(unsigned long) * v.size()); }
+
 	void set(uint32_t p) { v[p/word_bits()] |= 1UL << (p%word_bits()); }
 	void unset(uint32_t p) { v[p/word_bits()] &= ~(1UL << (p%word_bits())); }
 	bool get(uint32_t p) const { return v[p/word_bits()] & (1UL << (p%word_bits())); }
@@ -277,9 +279,19 @@ struct bitset {
 				return i * word_bits() - (BSR(v[i-1])+1);
 		return -1;
 	}
+	int32_t max_bit_lt(uint32_t p) const
+	{
+		int32_t i = (p+word_bits()-1)/word_bits();
+		if (!i)
+			return -1;
+		unsigned long w = v[i-1] & ~(~0UL << (p % word_bits()));
+		if (w)
+			return i * word_bits() - (BSR(w)+1);
+		return i > 1 ? max_bit((i-2)*word_bits()) : -1;
+	}
 	void resize(uint32_t n) { v.resize((n+word_bits()-1)/word_bits()); }
 
-	uint32_t bitcount(uint32_t a, uint32_t b)
+	uint32_t bitcount(uint32_t a, uint32_t b) const
 	{
 		uint32_t r = 0;
 		uint32_t lo = a/word_bits();
@@ -293,6 +305,21 @@ struct bitset {
 			r += __builtin_popcountl(w);
 		}
 		return r;
+	}
+
+	uint32_t is_zero(uint32_t a, uint32_t b)
+	{
+		unsigned long x = 0, y = 0, z = 0;
+		uint32_t lo = a/word_bits();
+		uint32_t hi = std::min(v.size(),(b+word_bits()-1)/word_bits());
+		if (lo >= hi)
+			return true;
+		x = v[lo  ] &  (~0UL << (a % word_bits()));
+		y = hi-1 == b/word_bits() ? v[hi-1] & ~(~0UL << (b % word_bits())) : v[hi-1];
+		z = (lo == b/word_bits()) ? x & y : x | y;
+		for (uint32_t i=lo+1; !z && i<hi-1; i++)
+			z |= v[i];
+		return !z;
 	}
 };
 
@@ -412,7 +439,7 @@ class ksat {
 	void add_clause0(std::vector<lit> &);
 	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	template <bool>
-	int32_t resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
+	std::pair<int32_t,int32_t> resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	void trackback(uint32_t dlevel);
 
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
