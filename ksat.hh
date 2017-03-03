@@ -253,6 +253,23 @@ struct measurement {
 
 struct bitset {
 
+	struct ritr {
+		const bitset &bs;
+		int32_t p;
+
+		ritr(const bitset &bs, int32_t p) : bs(bs), p(bs.max_bit(p)) {}
+		ritr(const bitset &bs) : bs(bs), p(bs.max_bit()) {}
+
+		ritr & operator++() { p = bs.max_bit_lt(p); return *this; }
+		ritr   operator++(int) { ritr tmp = *this; ++*this; return tmp; }
+
+		const int32_t & operator*() const { return p; }
+		const int32_t * operator->() const { return std::addressof(**this); }
+
+		bool operator==(const ritr &o) const { return p == o.p; }
+		bool operator!=(const ritr &o) const { return !(*this == o); }
+	};
+
 	static constexpr size_t word_bits() { return sizeof(unsigned long)*CHAR_BIT; }
 
 	std::vector<unsigned long> v;
@@ -261,6 +278,9 @@ struct bitset {
 	explicit bitset(uint32_t n) : v((n+word_bits()-1)/word_bits()) {}
 
 	void clear() { memset(v.data(), 0, sizeof(unsigned long) * v.size()); }
+
+	ritr rbegin() const { return { *this }; }
+	ritr rend  () const { return { *this, -1 }; }
 
 	void set(uint32_t p) { v[p/word_bits()] |= 1UL << (p%word_bits()); }
 	void unset(uint32_t p) { v[p/word_bits()] &= ~(1UL << (p%word_bits())); }
@@ -307,7 +327,7 @@ struct bitset {
 		return r;
 	}
 
-	uint32_t is_zero(uint32_t a, uint32_t b)
+	uint32_t is_zero(uint32_t a, uint32_t b) const
 	{
 		unsigned long x = 0, y = 0, z = 0;
 		uint32_t lo = a/word_bits();
@@ -323,85 +343,16 @@ struct bitset {
 	}
 };
 
-struct bin_inv_heap {
+struct bin_inv_heap;
+struct statistics;
 
-	const uint32_t *keys;
-	uint32_t *paeh; /* mapping var -> heap index */
-	uint32_t *heap; /* mapping heap index -> var */
-	uint32_t n, valid;
-
-	explicit bin_inv_heap(const uint32_t *keys, uint32_t n)
-	: keys(keys), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
-	{
-		for (uint32_t i=0; i<n; i++)
-			heap[i] = paeh[i] = i;
-	}
-
-	~bin_inv_heap()
-	{
-		delete[] paeh;
-		delete[] heap;
-	}
-
-	void swap(uint32_t &va, uint32_t &vb)
-	{
-		std::swap(paeh[va], paeh[vb]);
-		std::swap(va, vb);
-	}
-
-	uint32_t pop()
-	{
-		uint32_t r = heap[0];
-		swap(heap[0], heap[--valid]);
-		sift_down(0);
-		return r;
-	}
-
-	bool le(uint32_t a, uint32_t b) const
-	{
-		return keys[a] > keys[b];
-	}
-
-	void sift_down(uint32_t i)
-	{
-		while (true) {
-			uint32_t c = i;
-			if (2*i+1 < valid && !le(heap[c], heap[2*i+1]))
-				c = 2*i+1;
-			if (2*i+2 < valid && !le(heap[c], heap[2*i+2]))
-				c = 2*i+2;
-			if (i == c)
-				break;
-			swap(heap[i], heap[c]);
-			i = c;
-		}
-	}
-
-	void sift_up(uint32_t i)
-	{
-		while (i && !le(heap[i/2], heap[i])) {
-			swap(heap[i/2], heap[i]);
-			i = i/2;
-		}
-	}
-
-	void build()
-	{
-		for (uint32_t i=valid/2; i; i--)
-			sift_down(i-1);
-	}
-
-	uint32_t idx(uint32_t v) const { return paeh[v]; }
-
-	void restore(uint32_t nvalid)
-	{
-		assert(nvalid >= valid);
-		valid = nvalid;
-		build();
-	}
+enum status {
+	UNSAT, SAT, INDET,
 };
 
 class ksat {
+
+	friend struct statistics;
 
 	struct var_desc {
 		uint32_t value : 1;
@@ -429,24 +380,18 @@ class ksat {
 	mutable uint32_t *active;
 	mutable uint32_t n_active;
 	mutable uint32_t *vsids;
-	void reg(lit a) const;
-	void dec_all() const;
 
 	mutable bitset avail;
 
-	lit next_decision() const;
-	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], unsigned long *, unsigned long *, unsigned long *) const;
-	void add_clause0(std::vector<lit> &);
+	void reg(lit a) const;
+	void dec_all() const;
 	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	template <bool>
 	std::pair<int32_t,int32_t> resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
-	void trackback(uint32_t dlevel);
-
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
 
-	void deref(const clause_proxy &cp, lit *tmp, const lit **a, const lit **b) const { db.deref(cp, tmp, a, b); }
-
-	void vacuum();
+	void deref(const clause_proxy &cp, lit *tmp, const lit **a, const lit **b) const
+	{ db.deref(cp, tmp, a, b); }
 
 	struct bin_cl_itr {
 
@@ -462,24 +407,8 @@ class ksat {
 		uint32_t & pos()       { return tmp_cl[1]; }
 		uint32_t   pos() const { return tmp_cl[1]; }
 
-		void skip_non_bin()
-		{
-			for (; pos() < 2*sat.nvars; ++pos(), pos_idx=0)
-				for (; pos_idx < sat.watches[pos()].size(); pos_idx++) {
-					watch &w = sat.watches[pos()][pos_idx];
-					if (!is_ptr(w.this_cl) && pos() < w.implied_lit) {
-						tmp_cl[2] = w.implied_lit;
-						return;
-					}
-				}
-		}
-
-		bin_cl_itr & operator++()
-		{
-			++pos_idx;
-			skip_non_bin();
-			return *this;
-		}
+		void skip_non_bin();
+		bin_cl_itr & operator++();
 
 		const clause & operator*() const
 		{
@@ -491,26 +420,50 @@ class ksat {
 		bool operator!=(const bin_cl_itr &o) const { return !(*this == o); }
 	};
 
-	const watch * propagate_units(unsigned long *, unsigned long *, unsigned long *);
-
 public:
+	/*
+	 * (de-)construction
+	 */
+
 	ksat(const ksat &) = delete;
 	ksat() {}
 	~ksat();
 
 	ksat & operator=(const ksat &) = delete;
 
-	bool unsat = false; /* shortcut for \exists v : vars[v].implied == 3 */
+	/*
+	 * control
+	 */
 
-	int  run();
 	void init(uint32_t nvars);
 	void add_clause(std::vector<lit> &c);
-	void stats(int verbosity);
+
+	lit next_decision() const;
+	void make_decision(lit l);
+	const watch * propagate_units(struct statistics *stats);
+	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], struct statistics *stats) const;
+	void learn_clause(std::vector<lit> &, struct statistics *stats);
+	void trackback(uint32_t dlevel);
+
+	void vacuum();
+
+	status run();
+
+	/*
+	 * access to state
+	 */
+
+	bool unsat = false;
 
 	uint32_t num_vars() const { return nvars; }
 
 	unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
 
+	/*
+	 * access clauses: iterators
+	 */
+
+	/* assignments (including reasons) */
 	typename decltype(units)::const_iterator units_begin() const { return units.begin(); }
 	typename decltype(units)::const_iterator units_end()   const { return units.end(); }
 	size_t                                   units_size()  const { return units.size(); }
@@ -518,6 +471,7 @@ public:
 	bin_cl_itr binary_clauses_begin() const { return bin_cl_itr(*this, 0); }
 	bin_cl_itr binary_clauses_end()   const { return bin_cl_itr(*this, 2*nvars); }
 
+	/* clauses of size >= 3 */
 	clause_db::iterator large_clauses_begin() const { return db.begin(); }
 	clause_db::iterator large_clauses_end()   const { return db.end(); }
 
@@ -527,27 +481,17 @@ public:
 		const ksat &sat;
 	public:
 		cl_ref(const ksat &sat) : sat(sat) {}
-
-		clause_itr begin() const
-		{
-			return {
-				sat.binary_clauses_begin(),
-				sat.binary_clauses_end(),
-				sat.large_clauses_begin()
-			};
-		}
-
-		clause_itr end() const
-		{
-			return {
-				sat.binary_clauses_end(),
-				sat.binary_clauses_end(),
-				sat.large_clauses_end()
-			};
-		}
+		clause_itr begin() const;
+		clause_itr end() const;
 	};
 
+	/* allows 'for (const clause &cl : sat.clauses()) {...}' */
 	cl_ref clauses() const { return { *this }; }
+
+	/*
+	 * stats
+	 */
+	void stats(int verbosity);
 };
 
 static inline lit dimacs_to_lit(long v)

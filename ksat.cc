@@ -60,6 +60,155 @@ clause_db::clause_db()
 	add(0, false); /* reserve {0,0} clause_ptr (equiv null) */
 }
 
+struct statistics {
+	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0, learnt = 0;
+	unsigned long pt = 0, rt = 0, dt = 0, tt = 0, wft = 0;
+	unsigned long learnt_lits = 0;
+	unsigned long last_out = 0;
+	unsigned long restarts = 0;
+	timer t;
+	const ksat &sat;
+	statistics(const ksat &sat) : sat(sat) { t.start(); }
+
+	void operator()()
+	{
+		last_out = t.get();
+		uint32_t n = 0;
+		for (const auto &c : sat.db.chunks)
+			n += c.valid;
+		double s = t.get()/1e6;
+		uint32_t fixed = sat.decisions.empty() ? sat.units.size() : sat.decisions.front();
+		fprintf(stderr,
+		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
+		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
+		        s, fixed, sat.nvars-fixed,
+		        conflicts, conflicts/s, restarts,
+		        learnt, 10*learnt_lits/(conflicts+1)*.1,
+		        n_decisions, n_decisions/s, dt/1e6, sat.decisions.size(),
+		        propagations, propagations/(pt/1e6), pt/1e6, wft/1e6,
+		        resolutions, resolutions/(rt/1e6), rt/1e6,
+		        tt/1e6,
+		        n>>(20-2));
+	}
+};
+
+struct bin_inv_heap {
+
+	const uint32_t *keys;
+	uint32_t *paeh; /* mapping var -> heap index */
+	uint32_t *heap; /* mapping heap index -> var */
+	uint32_t n, valid;
+
+	explicit bin_inv_heap(const uint32_t *keys, uint32_t n)
+	: keys(keys), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
+	{
+		for (uint32_t i=0; i<n; i++)
+			heap[i] = paeh[i] = i;
+	}
+
+	~bin_inv_heap()
+	{
+		delete[] paeh;
+		delete[] heap;
+	}
+
+	void swap(uint32_t &va, uint32_t &vb)
+	{
+		std::swap(paeh[va], paeh[vb]);
+		std::swap(va, vb);
+	}
+
+	uint32_t pop()
+	{
+		uint32_t r = heap[0];
+		swap(heap[0], heap[--valid]);
+		sift_down(0);
+		return r;
+	}
+
+	bool le(uint32_t a, uint32_t b) const
+	{
+		return keys[a] > keys[b];
+	}
+
+	void sift_down(uint32_t i)
+	{
+		while (true) {
+			uint32_t c = i;
+			if (2*i+1 < valid && !le(heap[c], heap[2*i+1]))
+				c = 2*i+1;
+			if (2*i+2 < valid && !le(heap[c], heap[2*i+2]))
+				c = 2*i+2;
+			if (i == c)
+				break;
+			swap(heap[i], heap[c]);
+			i = c;
+		}
+	}
+
+	void sift_up(uint32_t i)
+	{
+		while (i && !le(heap[i/2], heap[i])) {
+			swap(heap[i/2], heap[i]);
+			i = i/2;
+		}
+	}
+
+	void build()
+	{
+		for (uint32_t i=valid/2; i; i--)
+			sift_down(i-1);
+	}
+
+	uint32_t idx(uint32_t v) const { return paeh[v]; }
+
+	void restore(uint32_t nvalid)
+	{
+		assert(nvalid >= valid);
+		valid = nvalid;
+		build();
+	}
+};
+
+void ksat::bin_cl_itr::skip_non_bin()
+{
+	for (; pos() < 2*sat.nvars; ++pos(), pos_idx=0) {
+		const auto &ww = sat.watches[pos()];
+		for (; pos_idx < ww.size(); pos_idx++) {
+			const watch &w = ww[pos_idx];
+			if (!is_ptr(w.this_cl) && pos() < w.implied_lit) {
+				tmp_cl[2] = w.implied_lit;
+				return;
+			}
+		}
+	}
+}
+
+ksat::bin_cl_itr & ksat::bin_cl_itr::operator++()
+{
+	++pos_idx;
+	skip_non_bin();
+	return *this;
+}
+
+ksat::clause_itr ksat::cl_ref::begin() const
+{
+	return {
+		sat.binary_clauses_begin(),
+		sat.binary_clauses_end(),
+		sat.large_clauses_begin()
+	};
+}
+
+ksat::clause_itr ksat::cl_ref::end() const
+{
+	return {
+		sat.binary_clauses_end(),
+		sat.binary_clauses_end(),
+		sat.large_clauses_end()
+	};
+}
+
 ksat::~ksat()
 {
 	delete lit_heap;
@@ -180,12 +329,12 @@ void ksat::dec_all() const
 		vsids[i] = (vsids[i]+1)>>1;
 }
 
-const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *pt, unsigned long *wft)
+const watch * ksat::propagate_units(struct statistics *stats)
 {
 	// fprintf(stderr, "%zu to be propagated, unsat: %u\n", units.size(), unsat);
 	const watch *rw = nullptr;
 	unsigned long up = unit_ptr;
-	timer t, tt;
+	timer t;
 	t.start();
 	for (; unit_ptr < units.size(); unit_ptr++) {
 		lit l = units[unit_ptr].implied_lit;
@@ -294,7 +443,7 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 			assert(var(implied) != var(l));
 			vars[var(implied)] = var_desc{sign(implied),(uint32_t)units.size()};
 
-			/*
+			/* Basic algorithm:
 			if (clause satisfied through w2)
 				continue;
 			else if (exists k assigned true in clause)
@@ -309,16 +458,8 @@ const watch * ksat::propagate_units(unsigned long *propagations, unsigned long *
 			*/
 		}
 	}
-	unsigned long us = t.get();
-	unsigned long n = (unit_ptr-up) + (rw != nullptr);
-	*propagations += n;
-	*pt += us;
-#if 0
-	fprintf(stderr, "dl %zu: %ld[%u] propagations: %lu in %luus (%g props/sec)\n",
-	        decisions.size(),
-	        decisions.empty() ? 0 : lit_to_dimacs(units[decisions.back()].implied_lit),
-	        decisions.empty() ? 0 : decisions.back(), n, t.get(), n/(us/1e6));
-#endif
+	stats->propagations += (unit_ptr-up) + (rw != nullptr);
+	stats->pt += t.get();
 	return rw;
 }
 
@@ -512,7 +653,6 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	}
 	int32_t p = avail.max_bit(), q;
 	bool have_merged_lit = false;
-	bool is_merge_res = false;
 	std::pair<int32_t,int32_t> ret;
 	ret.first = -1;
 
@@ -522,12 +662,12 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		assert(p >= n);
 		v.clear();
 		v.push_back(assertion(~units[p].implied_lit));
-		int32_t dec = 0;
-		for (uint32_t i=1, r; (int32_t)(r = av.max_bit()) >= 0; i++) {
+		int32_t dec = 0, r;
+		for (uint32_t i=1; (r = av.max_bit()) >= 0; i++) {
 			assert(r < n || (i == 1 && is_merge_res));
 			if (i == (is_merge_res ? 2 : 1))
 				for (dec=decisions.size(); dec>0; dec--)
-					if (r >= decisions[dec-1])
+					if ((uint32_t)r >= decisions[dec-1])
 						break;
 			//if (i >= (is_merge_res ? 2 : 1))
 			//	assert(p < n);
@@ -546,8 +686,8 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		q = avail.max_bit(p);
 //		fprintf(stderr, "unset %u, next q: %d\n", p, q);
 		if (q < n) {
-			is_merge_res = false;
-			break;
+			ret.second = collect_lits(p, v[1], avail, false);
+			return ret;
 		}
 		if (use_merge_res && have_merged_lit &&
 		#if 1
@@ -556,7 +696,6 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		    avail.bitcount(n,q) <= 2 - 2 /* -2: p and q on conflict level*/
 		#endif
 		) {
-			is_merge_res = true;
 			bitset tmp = avail;
 			ret.first = collect_lits(p, v[0], tmp, true);
 		//	break;
@@ -578,12 +717,9 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		p = q;
 		m.tick();
 	}
-
-	ret.second = collect_lits(p, v[1], avail, false);
-	return ret;
 }
 
-uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learnt, unsigned long *resolutions, unsigned long *rt) const
+uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *stats) const
 {
 	std::pair<int32_t,int32_t> dec = {-1,-1};
 	measurement m;
@@ -596,8 +732,8 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learn
 		dec = resolve_conflict2<false>(w, v, m);
 
 	m.stop();
-	*resolutions += m.n;
-	*rt += m.t;
+	stats->resolutions += m.n;
+	stats->rt += m.t;
 #if 0
 	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %d\n",
 	        decisions.size(), decisions.back(), m.t, m.n, v[1].size(), dec);
@@ -608,100 +744,93 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], unsigned long *learn
 			v[0][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
 		dec.first = decisions.size()-1;
 	}
-	*learnt += 2;
 	return std::min(dec.first, dec.second);
 }
 
-int ksat::run()
+void ksat::make_decision(lit d)
+{
+	assert(!vars[var(d)].have());
+	decisions.push_back(units.size());
+	// fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
+	units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
+	vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
+}
+
+status ksat::run()
 {
 	vector<lit> cl[2];
-	unsigned long conflicts = 0, n_decisions = 0, propagations = 0, resolutions = 0, learnt = 0;
-	unsigned long pt = 0, rt = 0, dt = 0, tt = 0, wft = 0;
-	timer t;
-	t.start();
-	int r = 0;
-	unsigned long learnt_lits = 0;
-	unsigned long last_out = 0;
-	unsigned long restarts = 0;
-	auto stats = [&]{
-		last_out = t.get();
-		uint32_t n = 0;
-		for (const auto &c : db.chunks)
-			n += c.valid;
-		double s = t.get()/1e6;
-		uint32_t fixed = decisions.empty() ? units.size() : decisions.front();
-		fprintf(stderr,
-		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
-		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
-		        s, fixed, nvars-fixed,
-		        conflicts, conflicts/s, restarts,
-		        learnt, 10*learnt_lits/(conflicts+1)*.1,
-		        n_decisions, n_decisions/s, dt/1e6, decisions.size(),
-		        propagations, propagations/(pt/1e6), pt/1e6, wft/1e6,
-		        resolutions, resolutions/(rt/1e6), rt/1e6,
-		        tt/1e6,
-		        n>>(20-2));
-	};
-	bool do_vacuum = true;
+	statistics stats(*this);
+	bool do_vacuum = true; /* cleanups only on decision level 0 */
+	status r = INDET;
 	luby_seq luby(1 << 6);
-	unsigned long next_restart = luby();
-	unsigned long last_vacuum = 0;
-	unsigned long last_vsids_adj = 0;
-	timer st;
+	unsigned long next_restart = luby(); /* restart interval increments */
+	unsigned long last_vacuum = 0;       /* helper to decide whether to clean up the clause db */
+//	unsigned long last_vsids_adj = 0;
+	timer st; /* measure timings of individual parts */
 	while (1) {
-		if (t.get()-last_out > 1000000)
+		/* output statistics approx. every second */
+		if (stats.t.get()-stats.last_out > 1000000)
 			stats();
-		if (const watch *w = propagate_units(&propagations, &pt, &wft)) {
-			++conflicts;
+
+		/* propagate everything from unit_ptr to units.size() and check
+		 * for a conflict w */
+		if (const watch *w = propagate_units(&stats)) {
+			++stats.conflicts;
 			if (decisions.empty()) {
+				/* conflict w/o decisions */
 				unsat = true;
-				r = 20;
+				r = UNSAT;
 				break;
 			}
-			uint32_t decision_level = analyze(w, cl, &learnt, &resolutions, &rt);
-			learnt_lits += cl[1].size() + cl[0].size();
+			/* analyze the conflict and determine clauses cl to learn */
+			uint32_t decision_level = analyze(w, cl, &stats);
 			st.start();
+			/* check whether cl[0] subsumes cl[1] */
 			bool inc = cl[1].size() >= cl[0].size() &&
 			           includes(cl[1].begin(), cl[1].end(), cl[0].begin(), cl[0].end(),
 			                    [this](lit a, lit b){ return -(int32_t)(vars[var(a)].trail_pos_plus1 - vars[var(b)].trail_pos_plus1); });
+			/* reset assignments made */
 			trackback(decision_level);
-			add_clause0(cl[0]);
+			/* add learnt clauses to db */
+			learn_clause(cl[0], &stats);
 			if (!inc)
-				add_clause0(cl[1]);
-			if (conflicts == next_restart) {
+				learn_clause(cl[1], &stats);
+			/* check whether to restart */
+			if (stats.conflicts == next_restart) {
 				if (decision_level)
 					trackback(0);
 				do_vacuum = units.size() > last_vacuum;
-				restarts++;
+				stats.restarts++;
 				next_restart += (++luby)();
-				dec_all();
+				dec_all(); /* decrease VSIDS values */
 			}
-			tt += st.get();
+			stats.tt += st.get();
+			/* try propagation again with new clauses attached */
 			continue;
 		}
+		/* clean up clause db if necessary */
 		if (do_vacuum) {
 			assert(decisions.empty());
 			vacuum();
 			do_vacuum = false;
 			last_vacuum = units.size();
 		}
+		/* make a new decision */
 		st.start();
 		if (lit_heap)
 			lit_heap_valid.push_back(lit_heap->valid);
-		lit d = next_decision();
-		dt += st.get();
+		lit d = next_decision(); /* via VSIDS */
+		stats.dt += st.get();
 		if (var(d) >= nvars) {
-			r = 10;
+			/* no decision possible, all variables assigned */
+			r = SAT;
 			break;
 		}
-		n_decisions++;
-		decisions.push_back(units.size());
-		// fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
-		units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
-		vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
+		stats.n_decisions++;
+		make_decision(d);
 	}
 	stats();
-	fprintf(stderr, "%s\n", r == 10 ? "SAT" : r == 20 ? "UNSAT" : "INDET");
+	fprintf(stderr, "%s\n", r == SAT ? "SAT" : r == UNSAT ? "UNSAT" : "INDET");
 	return r;
 }
 
@@ -728,9 +857,11 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 	return true;
 }
 
-void ksat::add_clause0(vector<lit> &cl)
+void ksat::learn_clause(vector<lit> &cl, struct statistics *stats)
 {
 	unsigned j=0;
+	stats->learnt++;
+	stats->learnt_lits += cl.size();
 #if 0
 	fprintf(stderr, "adding clause");
 	unsigned i;

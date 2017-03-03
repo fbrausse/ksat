@@ -205,7 +205,8 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 		do_dump(solver, dump);
 		fclose(dump);
 	}
-	if (r == 10) {
+	switch (r) {
+	case SAT: {
 		printf("s SATISFIABLE\n");
 		printf("v");
 		unsigned n = 0;
@@ -215,8 +216,11 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 			printf(" %ld", lit_to_dimacs(it->implied_lit));
 		}
 		printf("\n");
-	} else {
+		return 10;
+	}
+	case UNSAT:
 		printf("s UNSATISFIABLE\n");
+		return 20;
 	}
 	return r;
 }
