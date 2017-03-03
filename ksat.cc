@@ -10,6 +10,8 @@ using std::swap;
 using std::vector;
 using std::forward_list;
 
+namespace ksat_ns {
+
 #define CHUNK_SIZE	(uint32_t)((1U << 26 /* 64 MiB */) / sizeof(uint32_t))
 
 clause_db::chunk::chunk(uint32_t sz)
@@ -1035,4 +1037,6 @@ void ksat::stats(int verbosity)
 			if (lg_sz[i])
 				fprintf(stderr, "\t%u: %u\n", i, lg_sz[i]);
 	fprintf(stderr, "%zu units to be propagated, unsat: %d\n", units.size(), unsat);
+}
+
 }

@@ -6,6 +6,8 @@
 
 #include "ksat.hh"
 
+using namespace ksat_ns;
+
 static int read_dimacs(ksat &solver, FILE *in)
 {
 	char *line = nullptr;

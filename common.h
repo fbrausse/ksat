@@ -2,12 +2,6 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#if 0
-#define _BSD_SOURCE			/* endianness conversions needed by "pb.h" */
-#define _POSIX_C_SOURCE		200809L	/* getline(), strndup() */
-#define _XOPEN_SOURCE			/* strptime() */
-#endif
-
 #if defined(__GNUC__) || defined(__clang__)
 # define likely(x)			__builtin_expect(!!(x), 1)
 # define unlikely(x)			__builtin_expect((x), 0)

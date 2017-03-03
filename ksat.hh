@@ -10,7 +10,205 @@
 #include <vector>
 #include <forward_list>
 
-#include "util.hh"
+#ifndef CACHE_LINE_SZ
+# define CACHE_LINE_SZ	64
+#endif
+
+#define NEXT_MULTIPLE(off,algn)	(((off)+(algn)-1)/(algn)*(algn))
+
+namespace ksat_ns {
+
+template <typename T,size_t cache_line_sz = CACHE_LINE_SZ>
+class vec {
+
+//	static_assert(std::is_pod<T>::value, "T needs to be POD");
+
+	static const size_t head_sz = sizeof(T*) + 2*sizeof(uint32_t);
+	static_assert(head_sz % alignof(T) == 0, "T needs proper alignment");
+
+	T *body;
+	uint32_t sz, cap;
+	alignas(T) char init[((cache_line_sz-head_sz%cache_line_sz)%cache_line_sz)];
+
+	T * at(uint32_t idx)
+	{
+		return idx < init_cap()
+		       ? reinterpret_cast<T *>(init + idx * sizeof(T))
+		       : body + (idx-init_cap());
+	}
+
+	const T * at(uint32_t idx) const
+	{
+		return idx < init_cap()
+		       ? reinterpret_cast<const T *>(init + idx * sizeof(T))
+		       : body + (idx-init_cap());
+	}
+
+public:
+	template <typename V>
+	struct itr {
+		V &v;
+		uint32_t idx;
+
+		itr(V &v, uint32_t idx) : v(v), idx(idx) {}
+
+		itr & operator++()    { ++idx; return *this; }
+		itr   operator++(int) { itr cpy = *this; ++*this; return cpy; }
+
+		      T & operator* ()       { return v[idx]; }
+		const T & operator* () const { return v[idx]; }
+		      T * operator->()       { return &**this; }
+		const T * operator->() const { return &**this; }
+
+		bool operator==(const itr &o) const { return idx == o.idx; }
+		bool operator!=(const itr &o) const { return idx != o.idx; }
+	};
+
+	static constexpr uint32_t init_cap() { return sizeof(init)/sizeof(T); }
+
+	typedef itr<vec>       iterator;
+	typedef itr<const vec> const_iterator;
+
+	vec() : body(nullptr), sz(0), cap(init_cap()) {}
+	explicit vec(size_t n) : vec()
+	{
+		reserve(n);
+		if (!std::is_pod<T>::value)
+			while (sz < n)
+				new (at(sz++)) T();
+	}
+	~vec()
+	{
+		if (!std::is_pod<T>::value)
+			clear();
+		free(body);
+	}
+	vec(const vec &) = delete;
+	vec(vec &&o) : body(o.body), sz(o.sz), cap(o.cap)
+	{
+		if (std::is_pod<T>::value)
+			memcpy(init, o.init, sizeof(init));
+		else
+			for (uint32_t i=0; i<std::min(sz,init_cap()); i++)
+				new (at(i)) T(std::move(o[i]));
+		o.body = nullptr;
+		o.sz = 0;
+	}
+
+	vec & operator=(vec) = delete;
+
+	void reserve(size_t n)
+	{
+		if (n <= init_cap())
+			return;
+		if (std::is_pod<T>::value)
+			body = (T *)realloc(body, ((cap = n) - init_cap()) * sizeof(T));
+		else {
+			T *tmp = (T *)malloc(((cap = n) - init_cap()) * sizeof(T));
+			std::swap(tmp, body);
+			for (uint32_t i=init_cap(); i<sz; i++)
+				new (at(i)) T(std::move(tmp[i-init_cap()]));
+			free(tmp);
+		}
+	}
+
+	T & operator[](uint32_t idx)
+	{
+		return *at(idx);
+	}
+
+	const T & operator[](uint32_t idx) const
+	{
+		return *at(idx);
+	}
+
+	      T & back()       { return (*this)[size()-1]; }
+	const T & back() const { return (*this)[size()-1]; }
+
+	iterator       begin()        { return iterator(*this, 0); }
+	iterator       end()          { return iterator(*this, sz); }
+	const_iterator begin()  const { return const_iterator(*this, 0); }
+	const_iterator end()    const { return const_iterator(*this, sz); }
+	const_iterator cbegin() const { return const_iterator(*this, 0); }
+	const_iterator cend()   const { return const_iterator(*this, sz); }
+
+	bool empty() const { return !sz; }
+	uint32_t size() const { return sz; }
+	uint32_t capacity() const { return cap; }
+
+	void push_back(const T &t)
+	{
+		if (sz >= cap)
+			reserve(2*(sz+1));
+		(*this)[sz++] = t;
+	}
+
+	template <typename... Args>
+	void emplace_back(Args &&... args)
+	{
+		if (sz >= cap)
+			reserve(2*(sz+1));
+		new (at(sz++)) T(std::forward<Args...>(args...));
+	}
+
+	void pop_back()
+	{
+		if (--sz < init_cap() && !std::is_pod<T>::value)
+			at(sz)->~T();
+	}
+
+	void clear()
+	{
+		if (std::is_pod<T>::value)
+			sz = 0;
+		else
+			while (!empty())
+				pop_back();
+	}
+};
+
+template <typename V, typename I1, typename I2>
+struct concat_itr {
+
+	I1 i1s;
+	const I1 i1e;
+	I2 i2s;
+
+	concat_itr(I1 i1s, I1 i1e, I2 i2s) : i1s(i1s), i1e(i1e), i2s(i2s) {}
+
+	V & operator*() const { return i1s != i1e ? *i1s : *i2s; }
+	V * operator->() const { return std::addressof(**this); }
+
+	concat_itr & operator++()
+	{
+		if (i1s != i1e)
+			++i1s;
+		else
+			++i2s;
+		return *this;
+	}
+
+	bool operator!=(const concat_itr &o) const { return i1s != o.i1s || i2s != o.i2s; }
+	bool operator==(const concat_itr &o) const { return !(*this != o); }
+};
+
+/* as per Knuth */
+class luby_seq {
+	const uint32_t factor;
+	uint32_t un = 1, vn = 1;
+public:
+	explicit luby_seq(uint32_t factor) : factor(factor) {}
+	uint32_t operator()() const { return factor*vn; }
+	luby_seq & operator++()
+	{
+		if ((un & -un) == vn) {
+			un++;
+			vn = 1;
+		} else
+			vn <<= 1;
+		return *this;
+	}
+};
 
 // typedef uint32_t var;
 // typedef uint32_t lit; /* 2*var + phase; phase ? pos : neg */
@@ -133,8 +331,8 @@ struct clause_db {
 		bool operator!=(const iterator &o) const { return !(*this == o); }
 	};
 
-	/* usually few chunks, try to keep their descriptors in the cache line
-	 * of this clause_db instance */
+	/* TODO: usually few chunks, try to keep their descriptors in the cache line
+	 * of this clause_db instance: use ksat::vec */
 	std::vector<chunk> chunks;
 
 	clause_db();
@@ -504,6 +702,8 @@ static inline long lit_to_dimacs(lit l)
 {
 	long v = (l.v >> 1) + 1;
 	return (l.v & 1) ? v : -v;
+}
+
 }
 
 #endif
