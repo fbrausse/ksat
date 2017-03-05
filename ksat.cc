@@ -6,6 +6,18 @@
 
 #include "ksat.hh"
 
+/* TODO [.: weak dep; !: dep; ?: related]:
+ * a) learnt clause minimization [Sörensson/Biere'09]
+ *   a1) local: self-subsuming resolution
+ *   a2) global
+ * b) intro special watch lists/handling for binary clauses
+ * c.a) compute/update LBD:
+ *   c1) keep LBD=2 clauses
+ *   c2) prune large-LBD clauses
+ * d!c) restart if learnt clause quality (via LBD) is low over a longer period
+ * e?c2) use SLUB-like allocator for clause_db
+ */
+
 using std::swap;
 using std::vector;
 using std::forward_list;
@@ -291,7 +303,6 @@ void ksat::vacuum()
 			}
 			assert(a[0] == i || a[1] == i);
 			if (vars[var(w.implied_lit)].have()) {
-				// argh.... this_cl.ptr is wrong
 				w.implied_lit = a[0] == i ? a[1] : a[0];
 				//watches[w.implied_lit].push_back({w.implied_lit < i ? w.this_cl : save,i});
 				assert(!vars[var(w.implied_lit)].have());
@@ -349,7 +360,6 @@ const watch * ksat::propagate_units(struct statistics *stats)
 			if (is_ptr(w.this_cl)) {
 				clause_ptr cl_ptr = w.this_cl.ptr;
 				clause &c = db[cl_ptr];
-			#if 1
 				if (c.l[0] == ~l)
 					c.l[0] = c.l[1], c.l[1] = ~l;
 				implied = c.l[0];
@@ -374,47 +384,10 @@ const watch * ksat::propagate_units(struct statistics *stats)
 					i--;
 					continue;
 				}
-			#else
-				unsigned j_true = 0, j_undef = 0;
-				for (unsigned j=2; j<c.header.size && !j_true; j++) {
-					lit k = c.l[j];
-					const var_desc &vk = vars[var(k)];
-					if (vk.have()) {
-						if (vk.value == sign(k))
-							j_true = j;
-					} else //if (!j_undef)
-						j_undef = j; // take last undef'ed lit
-				}
-				if (j_true || j_undef) {
-					unsigned j = j_true ? j_true : j_undef;
-					lit k = c.l[j];
-
-					watches[k].push_back(w);
-					w = wnl.back();
-					wnl.pop_back();
-
-					unsigned widx = c.l[1] == ~l;
-					assert(c.l[widx] == ~l);
-					c.l[j] = ~l;
-					c.l[widx] = k;
-
-					i--;
-
-					tt.start();
-					for (watch &v : watches[implied])
-						if (cl_ptr == v.this_cl.ptr) {
-							assert(v.implied_lit == ~l);
-							v.implied_lit = k;
-							break;
-						}
-					*wft += tt.get();
-
-					continue;
-				}
-			#endif
 			}
 			//if (v_implied.have()) {
 			if (vars[var(implied)].have()) {
+#if 0
 				assert(vars[var(implied)].value != sign(implied));
 				lit tmp[2];
 				const lit *a, *b;
@@ -422,9 +395,11 @@ const watch * ksat::propagate_units(struct statistics *stats)
 				for (; a<b; a++)
 					assert(vars[var(*a)].have() && vars[var(*a)].value != sign(*a));
 				// other watched lit set to false
+#endif
 				rw = &w;
 				break;
 			}
+#if 0
 			{
 				lit tmp[2];
 				const lit *a, *b;
@@ -441,6 +416,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 				assert(unset == 1);
 				assert(pos + neg == total - 1);
 			}
+#endif
 			units.emplace_back(w);
 			assert(var(implied) != var(l));
 			vars[var(implied)] = var_desc{sign(implied),(uint32_t)units.size()};
@@ -648,7 +624,6 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	deref(w->this_cl, tmp, &a, &b);
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
-//		reg(*a);
 		assert(vars[var(*a)].have());
 		assert(vars[var(*a)].value != sign(*a));
 		avail.set(tp(*a));
@@ -685,7 +660,8 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	while (1) {
 		assert(p >= n);
 		avail.unset(p);
-		q = avail.max_bit(p);
+//		assert(avail.max_bit(p) == avail.max_bit_lt(p));
+		q = avail.max_bit_lt(p); /* TODO? use .max_bit(n,p) */
 //		fprintf(stderr, "unset %u, next q: %d\n", p, q);
 		if (q < n) {
 			ret.second = collect_lits(p, v[1], avail, false);
@@ -700,12 +676,10 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		) {
 			bitset tmp = avail;
 			ret.first = collect_lits(p, v[0], tmp, true);
-		//	break;
 		}
 		deref(units[p].this_cl, tmp, &a, &b);
-//		reg(l);
 		for (; a<b; a++) {
-			if (tp(*a) == p)
+			if (tp(*a) == p) /* TODO: skip, is 1st or 2nd */
 				continue;
 //			fprintf(stderr, "adding2 %u\n", tp(*a));
 			assert(tp(*a) < p);
@@ -713,7 +687,6 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 				q = tp(*a);
 			if (use_merge_res && tp(*a) >= n && !have_merged_lit)
 				have_merged_lit = avail.get(tp(*a));
-//			reg(*a);
 			avail.set(tp(*a));
 		}
 		p = q;

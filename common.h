@@ -185,7 +185,7 @@ static inline func_non_null ssize_t ck_bsearch(
 	bsearch_depth = 0;
 #endif
 	while (l <= r) {
-#ifndef NBDEBUG
+#ifndef NDEBUG
 		bsearch_depth++;
 #endif
 		mm = l + (r-l)/2;

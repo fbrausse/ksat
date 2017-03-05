@@ -121,7 +121,7 @@ static void do_dump(const ksat &solver, FILE *f)
 			n++;
 			break;
 		}
-	fprintf(f, "c unsat:%d\n", solver.unsat);
+	fprintf(f, "c unsat:%d\n", solver.is_unsat());
 	fprintf(f, "p cnf %u %lu\n", solver.num_vars(), n + solver.units_size());
 #if 1
 	for (auto it = solver.units_begin(); it != solver.units_end(); ++it)

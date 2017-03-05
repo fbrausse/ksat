@@ -55,18 +55,21 @@ public:
 		itr & operator++()    { ++idx; return *this; }
 		itr   operator++(int) { itr cpy = *this; ++*this; return cpy; }
 
-		      T & operator* ()       { return v[idx]; }
 		const T & operator* () const { return v[idx]; }
-		      T * operator->()       { return &**this; }
 		const T * operator->() const { return &**this; }
 
 		bool operator==(const itr &o) const { return idx == o.idx; }
 		bool operator!=(const itr &o) const { return idx != o.idx; }
 	};
 
+	struct iterator : public itr<vec> {
+		using itr<vec>::itr;
+		      T & operator* ()       { return itr<vec>::v[itr<vec>::idx]; }
+		      T * operator->()       { return &**this; }
+	};
+
 	static constexpr uint32_t init_cap() { return sizeof(init)/sizeof(T); }
 
-	typedef itr<vec>       iterator;
 	typedef itr<const vec> const_iterator;
 
 	vec() : body(nullptr), sz(0), cap(init_cap()) {}
@@ -93,6 +96,7 @@ public:
 				new (at(i)) T(std::move(o[i]));
 		o.body = nullptr;
 		o.sz = 0;
+		o.cap = init_cap();
 	}
 
 	vec & operator=(vec) = delete;
@@ -151,11 +155,7 @@ public:
 		new (at(sz++)) T(std::forward<Args...>(args...));
 	}
 
-	void pop_back()
-	{
-		if (--sz < init_cap() && !std::is_pod<T>::value)
-			at(sz)->~T();
-	}
+	void pop_back() { at(--sz)->~T(); }
 
 	void clear()
 	{
@@ -502,12 +502,30 @@ struct bitset {
 		int32_t i = (p+word_bits()-1)/word_bits();
 		if (!i)
 			return -1;
-		unsigned long w = v[i-1] & ~(~0UL << (p % word_bits()));
+		unsigned long w = v[i-1];
+		if (i-1 == p/word_bits())
+			w &= ~(~0UL << (p % word_bits()));
 		if (w)
 			return i * word_bits() - (BSR(w)+1);
 		return i > 1 ? max_bit((i-2)*word_bits()) : -1;
 	}
+	int32_t max_bit(uint32_t a, uint32_t b)
+	{
+		uint32_t lo = a/word_bits();
+		uint32_t hi = (b+word_bits()-1)/word_bits();
+		for (uint32_t i=std::min((uint32_t)v.size(), hi); i>lo; i--) {
+			unsigned long w = v[i-1];
+			if (i-1 == lo)
+				w &= ~0UL << (a % word_bits());
+			if (i-1 == b/word_bits())
+				w &= ~(~0UL << (b % word_bits()));
+			if (w)
+				return i * word_bits() - (BSR(w)+1);
+		}
+		return -1;
+	}
 	void resize(uint32_t n) { v.resize((n+word_bits()-1)/word_bits()); }
+	void reserve(uint32_t n) { v.reserve((n+word_bits()-1)/word_bits()); }
 
 	uint32_t bitcount(uint32_t a, uint32_t b) const
 	{
@@ -574,12 +592,14 @@ class ksat {
 	uint32_t nvars;          // constant number of instance variables
 
 	std::vector<uint32_t> lit_heap_valid;
-	mutable bin_inv_heap *lit_heap = nullptr;
-	mutable uint32_t *active;
-	mutable uint32_t n_active;
-	mutable uint32_t *vsids;
+	bin_inv_heap *lit_heap = nullptr;
+	uint32_t *active;
+	uint32_t n_active;
+	uint32_t *vsids;
 
 	mutable bitset avail;
+
+	bool unsat = false;
 
 	void reg(lit a) const;
 	void dec_all() const;
@@ -651,8 +671,8 @@ public:
 	 * access to state
 	 */
 
-	bool unsat = false;
-
+	bool is_unsat() const { return unsat; }
+	status get_status() const { return unsat ? UNSAT : next_decision() >= nvars ? SAT : INDET; }
 	uint32_t num_vars() const { return nvars; }
 
 	unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
