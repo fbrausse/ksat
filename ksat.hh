@@ -572,7 +572,7 @@ static constexpr bool operator==(bool a, status b) { return   b == a; }
 static constexpr bool operator!=(status a, bool b) { return !(a == b); }
 static constexpr bool operator!=(bool a, status b) { return   b != a ; }
 #endif
-static constexpr bool valid(status a) { return a != INDET; }
+static constexpr bool valid(status a) { return !(a & INDET); }
 
 class ksat {
 
@@ -619,8 +619,9 @@ class ksat {
 	status value(uint32_t v) const { return vars[v].value; }
 	status value(lit l) const
 	{
-		unsigned r = (unsigned)value(var(l)) ^ !sign(l);
-		return r & 2 ? INDET : (status)r;
+	//	unsigned r = (unsigned)value(var(l)) ^ !sign(l);
+	//	return r & 2 ? INDET : (status)r;
+		return (status)(value(var(l)) ^ !sign(l));
 	}
 	bool   have(uint32_t v) const { return valid(value(v)); }
 	bool   have(lit l) const { return have(var(l)); }
