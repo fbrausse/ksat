@@ -355,7 +355,8 @@ const watch * ksat::propagate_units(struct statistics *stats)
 		for (unsigned i=0; i<wnl.size(); i++) {
 			watch &w = wnl[i];
 			lit &implied = w.implied_lit;
-			if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied))
+			//if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied))
+			if (value(implied) == TRUE)
 				continue;
 			if (is_ptr(w.this_cl)) {
 				clause_ptr cl_ptr = w.this_cl.ptr;
@@ -363,15 +364,17 @@ const watch * ksat::propagate_units(struct statistics *stats)
 				if (c.l[0] == ~l)
 					c.l[0] = c.l[1], c.l[1] = ~l;
 				implied = c.l[0];
-				if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied)) {
+				//if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied)) {
+				if (value(implied) == TRUE) {
 					// clause already satisfied
 					continue;
 				}
 				unsigned j;
 				for (j=2; j<c.header.size; j++) {
 					lit k = c.l[j];
-					const var_desc &vk = vars[var(k)];
-					if (!vk.have() || vk.value == sign(k))
+					//const var_desc &vk = vars[var(k)];
+					//if (!vk.have() || vk.value == sign(k))
+					if (value(k) != FALSE)
 						break;
 				}
 				if (j < c.header.size) {
@@ -386,7 +389,8 @@ const watch * ksat::propagate_units(struct statistics *stats)
 				}
 			}
 			//if (v_implied.have()) {
-			if (vars[var(implied)].have()) {
+			//if (vars[var(implied)].have()) {
+			if (value(implied) != INDET) {
 #if 0
 				assert(vars[var(implied)].value != sign(implied));
 				lit tmp[2];

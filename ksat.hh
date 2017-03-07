@@ -601,6 +601,9 @@ class ksat {
 
 	mutable bitset avail;
 
+	status value(uint32_t v) const { return vars[v].have() ? (status)vars[v].value : INDET; }
+	status value(lit l) const { return vars[var(l)].have() ? (status)(vars[var(l)].value == sign(l)) : INDET; }
+
 	bool unsat = false;
 
 	void reg(lit a) const;
