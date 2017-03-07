@@ -499,7 +499,7 @@ struct bitset {
 	}
 	int32_t max_bit_lt(uint32_t p) const
 	{
-		int32_t i = (p+word_bits()-1)/word_bits();
+		uint32_t i = (p+word_bits()-1)/word_bits();
 		if (!i)
 			return -1;
 		unsigned long w = v[i-1];
