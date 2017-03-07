@@ -563,21 +563,34 @@ struct bin_inv_heap;
 struct statistics;
 
 enum status {
-	FALSE, TRUE, INDET,
+	FALSE = false, TRUE = true, INDET,
 };
+#if 0
+static constexpr bool operator==(status a, bool b) { return (unsigned)a == b; }
+static constexpr bool operator==(bool a, status b) { return   b == a; }
+
+static constexpr bool operator!=(status a, bool b) { return !(a == b); }
+static constexpr bool operator!=(bool a, status b) { return   b != a ; }
+#endif
+static constexpr bool valid(status a) { return a != INDET; }
 
 class ksat {
 
 	friend struct statistics;
 
 	struct var_desc {
-		uint32_t value : 1;
+		status value : 2;
 		uint32_t trail_pos_plus1 : LOG_NUM_VARS;
 
-		var_desc(bool value=false, uint32_t trail_pos_plus1=0)
+		var_desc(status value=INDET, uint32_t trail_pos_plus1=0)
 		: value(value), trail_pos_plus1(trail_pos_plus1) {}
 
-		bool have() const { return trail_pos_plus1 > 0; }
+		bool have() const
+		{
+			//assert((trail_pos_plus1 > 0) ^ (value == INDET));
+			// return trail_pos_plus1 > 0;
+			return valid(value);
+		}
 	};
 
 	static_assert(sizeof(var_desc) == sizeof(uint32_t), "struct var_desc broken");
@@ -601,8 +614,16 @@ class ksat {
 
 	mutable bitset avail;
 
-	status value(uint32_t v) const { return vars[v].have() ? (status)vars[v].value : INDET; }
-	status value(lit l) const { return vars[var(l)].have() ? (status)(vars[var(l)].value == sign(l)) : INDET; }
+	//status value(uint32_t v) const { return vars[v].have() ? (status)vars[v].value : INDET; }
+	//status value(lit l) const { return vars[var(l)].have() ? (status)(vars[var(l)].value == sign(l)) : INDET; }
+	status value(uint32_t v) const { return vars[v].value; }
+	status value(lit l) const
+	{
+		unsigned r = (unsigned)value(var(l)) ^ !sign(l);
+		return r & 2 ? INDET : (status)r;
+	}
+	bool   have(uint32_t v) const { return valid(value(v)); }
+	bool   have(lit l) const { return have(var(l)); }
 
 	bool unsat = false;
 
@@ -612,6 +633,8 @@ class ksat {
 	template <bool>
 	std::pair<int32_t,int32_t> resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
+
+	void assign(const watch &w);
 
 	void deref(const clause_proxy &cp, lit *tmp, const lit **a, const lit **b) const
 	{ db.deref(cp, tmp, a, b); }
@@ -660,6 +683,7 @@ public:
 
 	void init(uint32_t nvars);
 	void add_clause(std::vector<lit> &c);
+	uint32_t add_var();
 
 	lit next_decision() const;
 	void make_decision(lit l);

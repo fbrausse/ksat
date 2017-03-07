@@ -277,6 +277,13 @@ void ksat::vacuum()
 				uint32_t open = 0;
 				bool sat = false;
 				for (uint32_t k=0; !sat && a+k<b; k++) {
+				#if 0
+					status r = value(a[k]);
+					if (!valid(r))
+						a[open++] = a[k];
+					else
+						sat = r&1;
+				#else
 					const var_desc &vk = vars[var(a[k])];
 					if (!vk.have())
 						a[open++] = a[k];
@@ -284,6 +291,7 @@ void ksat::vacuum()
 						sat = true;
 					//else
 					//	a[open++] = a[k];
+				#endif
 				}
 				assert(sat || open >= 2);
 				if (sat) {
@@ -302,10 +310,10 @@ void ksat::vacuum()
 				}
 			}
 			assert(a[0] == i || a[1] == i);
-			if (vars[var(w.implied_lit)].have()) {
+			if (have(w.implied_lit)) {
 				w.implied_lit = a[0] == i ? a[1] : a[0];
 				//watches[w.implied_lit].push_back({w.implied_lit < i ? w.this_cl : save,i});
-				assert(!vars[var(w.implied_lit)].have());
+				assert(!have(w.implied_lit));
 			}
 			if (c) {
 				del_db += is_ptr(w.this_cl) ? c->header.size - ndb[w.this_cl.ptr].header.size : (c->header.size+1);
@@ -319,7 +327,7 @@ void ksat::vacuum()
 #endif
 	for (uint32_t v=0; v<n_active; v++) {
 		uint32_t w = active[v];
-		if (vars[w].have() && vars[w].trail_pos_plus1 <= n)
+		if (have(w) && vars[w].trail_pos_plus1 <= n)
 			active[v--] = active[--n_active];
 	}
 	m.stop();
@@ -356,7 +364,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 			watch &w = wnl[i];
 			lit &implied = w.implied_lit;
 			//if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied))
-			if (value(implied) == TRUE)
+			if (value(implied) == true)
 				continue;
 			if (is_ptr(w.this_cl)) {
 				clause_ptr cl_ptr = w.this_cl.ptr;
@@ -365,7 +373,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 					c.l[0] = c.l[1], c.l[1] = ~l;
 				implied = c.l[0];
 				//if (vars[var(implied)].have() && vars[var(implied)].value == sign(implied)) {
-				if (value(implied) == TRUE) {
+				if (value(implied) == true) {
 					// clause already satisfied
 					continue;
 				}
@@ -374,7 +382,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 					lit k = c.l[j];
 					//const var_desc &vk = vars[var(k)];
 					//if (!vk.have() || vk.value == sign(k))
-					if (value(k) != FALSE)
+					if (value(k) != false)
 						break;
 				}
 				if (j < c.header.size) {
@@ -390,7 +398,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 			}
 			//if (v_implied.have()) {
 			//if (vars[var(implied)].have()) {
-			if (value(implied) != INDET) {
+			if (have(implied)) {
 #if 0
 				assert(vars[var(implied)].value != sign(implied));
 				lit tmp[2];
@@ -421,9 +429,10 @@ const watch * ksat::propagate_units(struct statistics *stats)
 				assert(pos + neg == total - 1);
 			}
 #endif
-			units.emplace_back(w);
 			assert(var(implied) != var(l));
-			vars[var(implied)] = var_desc{sign(implied),(uint32_t)units.size()};
+			assign(w);
+			//units.emplace_back(w);
+			//vars[var(implied)] = var_desc{(status)sign(implied),(uint32_t)units.size()};
 
 			/* Basic algorithm:
 			if (clause satisfied through w2)
@@ -451,7 +460,7 @@ lit ksat::next_decision() const
 	if (lit_heap)
 		while (lit_heap->valid) {
 			lit l = {lit_heap->pop()};
-			if (!vars[var(l)].have())
+			if (!have(l))
 				return l;
 		}
 	else {
@@ -459,7 +468,7 @@ lit ksat::next_decision() const
 #if 1
 		for (uint32_t v=0; v<n_active; v++) {
 			uint32_t w = active[v];
-			if (vars[w].have())
+			if (have(w))
 				continue;
 			if (max < 0 || vsids[max] < vsids[2*w])
 				max = 2*w;
@@ -502,8 +511,10 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	for (uint32_t i=dlevel; i<decisions.size(); i++)
 		vars[var(units[decisions[i]].implied_lit)].value ^= 0;
 #endif
-	for (uint32_t i=decisions[dlevel]; i<units.size(); i++)
-		vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
+	for (uint32_t i=decisions[dlevel]; i<units.size(); i++) {
+		vars[var(units[i].implied_lit)].value = INDET;
+	//	vars[var(units[i].implied_lit)].trail_pos_plus1 = 0;
+	}
 	if (lit_heap) {
 		uint32_t v = lit_heap_valid[dlevel];
 		lit_heap_valid.resize(dlevel);
@@ -637,7 +648,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	std::pair<int32_t,int32_t> ret;
 	ret.first = -1;
 
-	auto assertion = [this](lit l){ assert(!vars[var(l)].have() || vars[var(l)].value != sign(l)); return l; };
+	auto assertion = [this](lit l){ assert(!have(l) || vars[var(l)].value != sign(l)); return l; };
 
 	auto collect_lits = [this,n,assertion](int32_t p, vector<lit> &v, bitset &av, bool is_merge_res){
 		assert(p >= n);
@@ -726,13 +737,18 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *s
 	return std::min(dec.first, dec.second);
 }
 
+void ksat::assign(const watch &w)
+{
+	vars[var(w.implied_lit)] = var_desc{(status)sign(w.implied_lit),(uint32_t)units.size()+1};
+	units.push_back(w);
+}
+
 void ksat::make_decision(lit d)
 {
-	assert(!vars[var(d)].have());
+	assert(!have(d));
 	decisions.push_back(units.size());
 	// fprintf(stderr, "dl %zu: next decision %ld[%zu]\n", decisions.size(), lit_to_dimacs(d), units.size());
-	units.push_back({clause_proxy{.ptr = CLAUSE_PTR_NULL},d});
-	vars[var(d)] = var_desc{sign(d),(uint32_t)units.size()};
+	assign({clause_proxy{.ptr=CLAUSE_PTR_NULL},d});
 }
 
 status ksat::run()
@@ -831,8 +847,12 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 	if (v.have())
 		return false;
 #endif
+#if 1
+	assign({p,l});
+#else
 	units.push_back({p,l});
-	v = var_desc{sign(l),(uint32_t)units.size()};
+	v = var_desc{(status)sign(l),(uint32_t)units.size()};
+#endif
 	return true;
 }
 
@@ -852,7 +872,7 @@ void ksat::learn_clause(vector<lit> &cl, struct statistics *stats)
 #endif
 #if 1
 	for (unsigned i=0; j<2 && i<cl.size(); i++)
-		if (!vars[var(cl[i])].have()) {
+		if (!have(cl[i])) {
 			assert(j == i);
 			swap(cl[j++], cl[i]);
 		} else
@@ -870,7 +890,7 @@ void ksat::learn_clause(vector<lit> &cl, struct statistics *stats)
 		reg(l);
 	clause_proxy p;
 	/* 0 and especially 1 must be those assigned latest!!! */
-#if 1
+#if 0
 	#if 1
 	for (unsigned k=2; k<cl.size(); k++)
 		if (vars[var(cl[k-1])].have()) {
@@ -919,7 +939,7 @@ void ksat::add_clause(vector<lit> &c)
 	unsigned j=0;
 	bool sat = false;
 	for (unsigned i=0; !sat && j<2 && i<c.size(); i++)
-		if (!vars[var(c[i])].have())
+		if (!have(c[i]))
 			swap(c[j++], c[i]);
 		else
 			sat |= vars[var(c[i])].value == sign(c[i]);
