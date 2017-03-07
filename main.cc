@@ -208,7 +208,7 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 		fclose(dump);
 	}
 	switch (r) {
-	case SAT: {
+	case TRUE: {
 		printf("s SATISFIABLE\n");
 		printf("v");
 		unsigned n = 0;
@@ -220,7 +220,7 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 		printf("\n");
 		return 10;
 	}
-	case UNSAT:
+	case FALSE:
 		printf("s UNSATISFIABLE\n");
 		return 20;
 	}

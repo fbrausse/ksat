@@ -754,7 +754,7 @@ status ksat::run()
 			if (decisions.empty()) {
 				/* conflict w/o decisions */
 				unsat = true;
-				r = UNSAT;
+				r = FALSE;
 				break;
 			}
 			/* analyze the conflict and determine clauses cl to learn */
@@ -798,14 +798,14 @@ status ksat::run()
 		stats.dt += st.get();
 		if (var(d) >= nvars) {
 			/* no decision possible, all variables assigned */
-			r = SAT;
+			r = TRUE;
 			break;
 		}
 		stats.n_decisions++;
 		make_decision(d);
 	}
 	stats();
-	fprintf(stderr, "%s\n", r == SAT ? "SAT" : r == UNSAT ? "UNSAT" : "INDET");
+	fprintf(stderr, "%s\n", r == TRUE ? "SAT" : r == FALSE ? "UNSAT" : "INDET");
 	return r;
 }
 

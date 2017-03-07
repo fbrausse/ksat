@@ -563,7 +563,7 @@ struct bin_inv_heap;
 struct statistics;
 
 enum status {
-	UNSAT, SAT, INDET,
+	FALSE, TRUE, INDET,
 };
 
 class ksat {
@@ -579,6 +579,8 @@ class ksat {
 
 		bool have() const { return trail_pos_plus1 > 0; }
 	};
+
+	static_assert(sizeof(var_desc) == sizeof(uint32_t), "struct var_desc broken");
 
 	clause_db db;
 
@@ -672,7 +674,7 @@ public:
 	 */
 
 	bool is_unsat() const { return unsat; }
-	status get_status() const { return unsat ? UNSAT : next_decision() >= nvars ? SAT : INDET; }
+	status get_status() const { return unsat ? FALSE : next_decision() >= nvars ? TRUE : INDET; }
 	uint32_t num_vars() const { return nvars; }
 
 	unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
