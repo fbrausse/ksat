@@ -277,7 +277,7 @@ void ksat::vacuum()
 				uint32_t open = 0;
 				bool sat = false;
 				for (uint32_t k=0; !sat && a+k<b; k++) {
-				#if 0
+				#if 1
 					status r = value(a[k]);
 					if (!valid(r))
 						a[open++] = a[k];
@@ -327,7 +327,7 @@ void ksat::vacuum()
 #endif
 	for (uint32_t v=0; v<n_active; v++) {
 		uint32_t w = active[v];
-		if (have(w) && vars[w].trail_pos_plus1 <= n)
+		if (have(w) && vars[w].trail_pos() < n)
 			active[v--] = active[--n_active];
 	}
 	m.stop();
@@ -524,7 +524,7 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	decisions.resize(dlevel);
 	unit_ptr = units.size();
 }
-
+#if 0
 int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
 	lit clp[2];
@@ -626,12 +626,12 @@ in:
 			break;
 	return dec;
 }
-
+#endif
 template <bool use_merge_res>
 std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
 	const int32_t n = decisions.back();
-	auto tp = [this](lit l){ return vars[var(l)].trail_pos_plus1-1; };
+	auto tp = [this](lit l) -> int32_t { return vars[var(l)].trail_pos(); };
 
 	lit tmp[2];
 	const lit *a, *b;
@@ -639,8 +639,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	deref(w->this_cl, tmp, &a, &b);
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
-		assert(vars[var(*a)].have());
-		assert(vars[var(*a)].value != sign(*a));
+		assert(value(*a) == false);
 		avail.set(tp(*a));
 	}
 	int32_t p = avail.max_bit(), q;
@@ -648,7 +647,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	std::pair<int32_t,int32_t> ret;
 	ret.first = -1;
 
-	auto assertion = [this](lit l){ assert(!have(l) || vars[var(l)].value != sign(l)); return l; };
+	auto assertion = [this](lit l){ assert(!have(l) /* TODO: why? */ || value(l) == false); return l; };
 
 	auto collect_lits = [this,n,assertion](int32_t p, vector<lit> &v, bitset &av, bool is_merge_res){
 		assert(p >= n);
@@ -783,7 +782,7 @@ status ksat::run()
 			/* check whether cl[0] subsumes cl[1] */
 			bool inc = cl[1].size() >= cl[0].size() &&
 			           includes(cl[1].begin(), cl[1].end(), cl[0].begin(), cl[0].end(),
-			                    [this](lit a, lit b){ return -(int32_t)(vars[var(a)].trail_pos_plus1 - vars[var(b)].trail_pos_plus1); });
+			                    [this](lit a, lit b){ return -(int32_t)(vars[var(a)].trail_pos() - vars[var(b)].trail_pos()); });
 			/* reset assignments made */
 			trackback(decision_level);
 			/* add learnt clauses to db */
@@ -840,6 +839,11 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 	if (a.other())
 		return false;
 	a.set();
+#elif 1
+	if (value(l) == true)
+		return true;
+	if (have(l))
+		return false;
 #else
 	auto &v = vars[var(l)];
 	if (v.have() && v.value == sign(l))
@@ -942,7 +946,7 @@ void ksat::add_clause(vector<lit> &c)
 		if (!have(c[i]))
 			swap(c[j++], c[i]);
 		else
-			sat |= vars[var(c[i])].value == sign(c[i]);
+			sat |= value(c[i]);
 	if (c.size() >= 2) {
 		clause_proxy p;
 		for (lit l : c)

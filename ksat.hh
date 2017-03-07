@@ -591,8 +591,8 @@ class ksat {
 			// return trail_pos_plus1 > 0;
 			return valid(value);
 		}
+		uint32_t trail_pos() const { return trail_pos_plus1 - 1; }
 	};
-
 	static_assert(sizeof(var_desc) == sizeof(uint32_t), "struct var_desc broken");
 
 	clause_db db;
@@ -704,7 +704,8 @@ public:
 	status get_status() const { return unsat ? FALSE : next_decision() >= nvars ? TRUE : INDET; }
 	uint32_t num_vars() const { return nvars; }
 
-	unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
+	//unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
+	status get_assign(uint32_t v) const { return value(v); }
 
 	/*
 	 * access clauses: iterators
