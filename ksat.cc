@@ -636,6 +636,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	lit tmp[2];
 	const lit *a, *b;
 	avail.resize(units.size());
+	avail.clear();
 	deref(w->this_cl, tmp, &a, &b);
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
@@ -647,14 +648,14 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	std::pair<int32_t,int32_t> ret;
 	ret.first = -1;
 
-	auto assertion = [this](lit l){ assert(!have(l) /* TODO: why? */ || value(l) == false); return l; };
+	auto assertion = [this](lit l){ assert(value(l) == false); return l; };
 
-	auto collect_lits = [this,n,assertion](int32_t p, vector<lit> &v, bitset &av, bool is_merge_res){
+	auto collect_lits = [this,n,assertion](int32_t p, vector<lit> &v, const bitset &av, bool is_merge_res){
 		assert(p >= n);
 		v.clear();
 		v.push_back(assertion(~units[p].implied_lit));
-		int32_t dec = 0, r;
-		for (uint32_t i=1; (r = av.max_bit()) >= 0; i++) {
+		int32_t dec = 0, r = p;
+		for (uint32_t i=1; (r = av.max_bit_lt(r)) >= 0; i++) {
 			assert(r < n || (i == 1 && is_merge_res));
 			if (i == (is_merge_res ? 2 : 1))
 				for (dec=decisions.size(); dec>0; dec--)
@@ -665,7 +666,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 			//else
 			//	assert(p >= n);
 			v.push_back(assertion(~units[r].implied_lit));
-			av.unset(r);
+		//	av.unset(r);
 		}
 		assert(dec >= 0);
 		return dec;
@@ -688,8 +689,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		    avail.bitcount(n,q) <= 2 - 2 /* -2: p and q on conflict level*/
 		#endif
 		) {
-			bitset tmp = avail;
-			ret.first = collect_lits(p, v[0], tmp, true);
+			ret.first = collect_lits(p, v[0], avail, true);
 		}
 		deref(units[p].this_cl, tmp, &a, &b);
 		for (; a<b; a++) {
