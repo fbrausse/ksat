@@ -255,6 +255,7 @@ void ksat::init(uint32_t nvars)
 	n_active = nvars;
 #endif
 	avail.reserve(nvars);
+	simp.resize(2*nvars);
 }
 
 void ksat::vacuum()
@@ -533,6 +534,33 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	unit_ptr = units.size();
 }
 
+bool ksat::marked(uint32_t tp) const
+{
+	if (simp.get(2*tp+1))
+		return simp.get(2*tp+0);
+	lit tmp[2];
+	const lit *a, *b;
+	const watch &w = units[tp];
+	bool skip = (bool)w.this_cl;
+	db.deref(w.this_cl, tmp, &a, &b);
+	for (; skip && a<b; a++) {
+		if (*a == w.implied_lit)
+			continue;
+		uint32_t tq = vars[var(*a)].trail_pos();
+		assert(vars[var(*a)].trail_pos_plus1);
+		assert(tq < tp);
+		assert(*a == ~units[tq].implied_lit);
+		if (!units[tq].this_cl || !(avail.get(tq) || marked(tq)))
+			skip = false;
+	}
+	simp.set(2*tp+1);
+	if (skip)
+		simp.set(2*tp+0);
+	else
+		simp.unset(2*tp+0);
+	return skip;
+}
+
 template <bool use_merge_res>
 std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
@@ -567,8 +595,15 @@ std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector
 		int32_t r = p;
 		uint32_t ldec = decisions.size(); /* invariant: ldec > 0 && r >= decisions[ldec-1] */
 		res_info ret = { 0, 1 };
+		simp.clear();
+		simp.set(2*p+1);
+		unsigned skipped = 0;
 		for (uint32_t i=1; (r = av.max_bit_lt(r)) >= 0; i++) {
 			assert(r < n || (i == 1 && is_merge_res));
+			if (marked(r)) {
+				skipped++;
+				continue;
+			}
 			bool new_lb = false;
 			for (; ldec>0 && (uint32_t)r < decisions[ldec-1]; ldec--)
 				new_lb = true;
@@ -583,8 +618,9 @@ std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector
 			v.push_back(~units[r].implied_lit);
 		//	av.unset(r);
 		}
-	//	fprintf(stderr, "on dlvl %zu->%u learnt clause of size %zu and LBD %u\n",
-	//	        decisions.size(), ret.dlvl, v.size(), ret.lbd);
+		if (0)
+			fprintf(stderr, "on dlvl %zu->%u learnt clause of size %zu and LBD %u, skipped %u\n",
+				decisions.size(), ret.dlvl, v.size(), ret.lbd, skipped);
 		assert(ret.dlvl >= 0);
 		return ret;
 	};

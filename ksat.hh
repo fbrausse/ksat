@@ -617,7 +617,9 @@ class ksat {
 	uint32_t n_active;
 	uint32_t *vsids;
 
-	mutable bitset avail;
+	mutable bitset avail, simp;
+
+	bool marked(uint32_t tp) const;
 
 	//status value(uint32_t v) const { return vars[v].have() ? (status)vars[v].value : INDET; }
 	//status value(lit l) const { return vars[var(l)].have() ? (status)(vars[var(l)].value == sign(l)) : INDET; }
