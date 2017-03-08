@@ -711,13 +711,13 @@ status ksat::run()
 	vector<lit> cl[2];
 	statistics stats(*this);
 	bool do_vacuum = true; /* cleanups only on decision level 0 */
-	status r = INDET;
+	status r = unsat ? FALSE : INDET;
 	luby_seq luby(1 << 6);
 	unsigned long next_restart = luby(); /* restart interval increments */
 	unsigned long last_vacuum = 0;       /* helper to decide whether to clean up the clause db */
 //	unsigned long last_vsids_adj = 0;
 	timer st; /* measure timings of individual parts */
-	while (1) {
+	while (r == INDET) {
 		/* output statistics approx. every second */
 		if (stats.t.get()-stats.last_out > 1000000)
 			stats();
@@ -912,7 +912,7 @@ void ksat::add_clause(vector<lit> &c)
 			p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
 			p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
 		} else {
-#if 1
+#if 0
 			unsigned w1 = rand() % n;
 			unsigned w2 = rand() % (n-1);
 			if (w2 >= w1)
