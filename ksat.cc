@@ -20,7 +20,6 @@
 
 using std::swap;
 using std::vector;
-using std::forward_list;
 
 namespace ksat_ns {
 
@@ -106,15 +105,16 @@ struct statistics {
 	}
 };
 
+template <typename Le>
 struct bin_inv_heap {
 
-	const uint32_t *keys;
+	const Le le;
 	uint32_t *paeh; /* mapping var -> heap index */
 	uint32_t *heap; /* mapping heap index -> var */
 	uint32_t n, valid;
 
-	explicit bin_inv_heap(const uint32_t *keys, uint32_t n)
-	: keys(keys), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
+	explicit bin_inv_heap(Le le, uint32_t n)
+	: le(le), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
 	{
 		for (uint32_t i=0; i<n; i++)
 			heap[i] = paeh[i] = i;
@@ -140,31 +140,31 @@ struct bin_inv_heap {
 		return r;
 	}
 
-	bool le(uint32_t a, uint32_t b) const
-	{
-		return keys[a] > keys[b];
-	}
+	constexpr uint32_t par(uint32_t k) const { return (k-1) >> 1; }
+	constexpr uint32_t chl(uint32_t k) const { return k << 1 | 1U; }
+	constexpr uint32_t chr(uint32_t k) const { return (k+1) << 1; }
 
 	void sift_down(uint32_t i)
 	{
-		while (true) {
-			uint32_t c = i;
-			if (2*i+1 < valid && !le(heap[c], heap[2*i+1]))
-				c = 2*i+1;
-			if (2*i+2 < valid && !le(heap[c], heap[2*i+2]))
-				c = 2*i+2;
-			if (i == c)
+		uint32_t v = heap[i];
+		while (chl(i) < valid) {
+			uint32_t c = chr(i) < valid && !le(heap[chl(i)], heap[chr(i)]) ? chr(i) : chl(i);
+			if (le(v, heap[c]))
 				break;
-			swap(heap[i], heap[c]);
+			//swap(heap[i], heap[c]);
+			heap[i] = heap[c];
+			paeh[heap[i]] = i;
 			i = c;
 		}
+		heap[i] = v;
+		paeh[v] = i;
 	}
 
 	void sift_up(uint32_t i)
 	{
-		while (i && !le(heap[i/2], heap[i])) {
-			swap(heap[i/2], heap[i]);
-			i = i/2;
+		while (i && !le(heap[par(i)], heap[i])) {
+			swap(heap[par(i)], heap[i]);
+			i = par(i);
 		}
 	}
 
@@ -179,8 +179,15 @@ struct bin_inv_heap {
 	void restore(uint32_t nvalid)
 	{
 		assert(nvalid >= valid);
+	#if 1
+		while (valid < nvalid) {
+			valid++;
+			sift_up(valid-1);
+		}
+	#else
 		valid = nvalid;
 		build();
+	#endif
 	}
 };
 
@@ -240,7 +247,7 @@ void ksat::init(uint32_t nvars)
 	units.reserve(nvars);
 	vsids = new uint32_t[2*nvars];
 	memset(vsids, 0, sizeof(*vsids)*2*nvars);
-	//lit_heap = new bin_inv_heap(vsids, 2*nvars);
+	lit_heap = new bin_inv_heap<vsids_le>({vsids}, 2*nvars);
 #if 1
 	active = new uint32_t[nvars];
 	for (uint32_t v=0; v<nvars; v++)
@@ -341,8 +348,8 @@ void ksat::reg(lit a) const
 		dec_all();
 		vsids[a] = 1U << 31;
 	}
-//	if (lit_heap)
-//		lit_heap->sift_up(lit_heap->idx(a));
+	if (lit_heap)
+		lit_heap->sift_up(lit_heap->idx(a));
 }
 
 void ksat::dec_all() const

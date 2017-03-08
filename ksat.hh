@@ -8,7 +8,6 @@
 #include <cstdlib>	/* abs() */
 #include <cinttypes>	/* uint32_t */
 #include <vector>
-#include <forward_list>
 
 #ifndef CACHE_LINE_SZ
 # define CACHE_LINE_SZ	64
@@ -559,7 +558,7 @@ struct bitset {
 	}
 };
 
-struct bin_inv_heap;
+template <typename> struct bin_inv_heap;
 struct statistics;
 
 enum status {
@@ -595,6 +594,11 @@ class ksat {
 	};
 	static_assert(sizeof(var_desc) == sizeof(uint32_t), "struct var_desc broken");
 
+	struct vsids_le {
+		const uint32_t *keys;
+		bool operator()(uint32_t a, uint32_t b) const { return keys[a] >= keys[b]; }
+	};
+
 	clause_db db;
 
 	var_desc *vars;
@@ -607,7 +611,7 @@ class ksat {
 	uint32_t nvars;          // constant number of instance variables
 
 	std::vector<uint32_t> lit_heap_valid;
-	bin_inv_heap *lit_heap = nullptr;
+	bin_inv_heap<vsids_le> *lit_heap = nullptr;
 	uint32_t *active;
 	uint32_t n_active;
 	uint32_t *vsids;
