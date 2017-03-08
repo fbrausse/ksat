@@ -247,6 +247,7 @@ void ksat::init(uint32_t nvars)
 		active[v] = v;
 	n_active = nvars;
 #endif
+	avail.reserve(nvars);
 }
 
 void ksat::vacuum()
@@ -259,7 +260,7 @@ void ksat::vacuum()
 #if 1
 	clause_db ndb;
 	for (uint32_t i=0; i<2*nvars; i++) {
-		vec<watch> &ww = watches[i];
+		auto &ww = watches[i];
 		for (uint32_t j=0; j<ww.size(); j++) {
 			m.tick();
 			watch &w = ww[j];
@@ -359,7 +360,7 @@ const watch * ksat::propagate_units(struct statistics *stats)
 	t.start();
 	for (; unit_ptr < units.size(); unit_ptr++) {
 		lit l = units[unit_ptr].implied_lit;
-		vec<watch> &wnl = watches[~l];
+		auto &wnl = watches[~l];
 		for (unsigned i=0; i<wnl.size(); i++) {
 			watch &w = wnl[i];
 			lit &implied = w.implied_lit;
@@ -635,15 +636,17 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 
 	lit tmp[2];
 	const lit *a, *b;
-	avail.resize(units.size());
+	int32_t p = -1, q;
+	avail.resize(units.size()); // TODO: move to init()/add_var() and use .max_bit(units.size())
 	avail.clear();
 	deref(w->this_cl, tmp, &a, &b);
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
 		assert(value(*a) == false);
+		if (tp(*a) > p)
+			p = tp(*a);
 		avail.set(tp(*a));
 	}
-	int32_t p = avail.max_bit(), q;
 	bool have_merged_lit = false;
 	std::pair<int32_t,int32_t> ret;
 	ret.first = -1;

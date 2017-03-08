@@ -333,7 +333,7 @@ struct clause_db {
 
 	/* TODO: usually few chunks, try to keep their descriptors in the cache line
 	 * of this clause_db instance: use ksat::vec */
-	std::vector<chunk> chunks;
+	vec<chunk> chunks;
 
 	clause_db();
 	clause_db(const clause_db &) = delete;
