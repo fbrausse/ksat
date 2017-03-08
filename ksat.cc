@@ -283,7 +283,7 @@ void ksat::vacuum()
 			} else {
 				db.deref(w.this_cl, tmp, &a, &b);
 				uint32_t open = 0;
-				bool sat = false;
+				bool sat = false; // c && c->header.learnt;
 				for (uint32_t k=0; !sat && a+k<b; k++) {
 				#if 1
 					status r = value(a[k]);
@@ -532,112 +532,11 @@ void ksat::trackback(uint32_t dlevel) // to including dlevel
 	decisions.resize(dlevel);
 	unit_ptr = units.size();
 }
-#if 0
-int32_t ksat::resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
-{
-	lit clp[2];
-	const lit *a, *b;
-	uint32_t dec;
-	deref(w->this_cl, clp, &a, &b);
-	auto tp1 = [this](lit l){ return vars[var(l)].trail_pos_plus1; };
-	auto td = [tp1,k=decisions.back()](lit l){ return tp1(l) > k; };
-	auto gt = [tp1](lit a, lit b){ return tp1(a) > tp1(b); };
-	auto lit2tp = [tp1](lit l){ return lit{tp1(l) << 1 | sign(l)}; };
-	auto tp2lit = [this](lit l){ return lit{var(units[var(l)-1].implied_lit)<<1 | sign(l)}; };
-	lit l = w->implied_lit;
-	v[0].clear();
-	v[1].clear();
-	v[1].reserve(b-a);
-	v[1].push_back(lit2tp(a[0] == l ? a[1] : a[0]));
-	for (a += 2; a < b; a++) {
-		if (td(*a))
-			v[1].push_back(lit2tp(*a));
-		else
-			v[0].push_back(*a);
-	}
-	assert(v[1].size() >= 1);
-	l = lit2tp(l);
-	goto in;
-	while (v[1].size() > 1) {
-#if 0
-		fprintf(stderr, "dl %zu:%u resolve1:", decisions.size(), decisions.back());
-		for (int i=1; i>=0; i--) {
-			fprintf(stderr, " %zu:", v[i].size());
-			for (lit k : v[i])
-				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
-		}
-		fprintf(stderr, "\n");
-#endif
-		{
-		unsigned max = 0;
-		l = v[1][max];
-		for (unsigned i=1; i<v[1].size(); i++) {
-			lit k = v[1][i];
-			if (l < k) {
-				max = i;
-				l = v[1][max];
-			} else if (l == k) {
-				v[1][i--] = v[1].back();
-				v[1].pop_back();
-			}
-		}
-		if (v[1].size() == 1)
-			break;
-		else if (0 && v[1].size() > decisions.size()) {
-			v[1].clear();
-			return -1;
-		}
-		v[1][max] = v[1].back();
-		}
-		v[1].pop_back();
-in:
-		deref(units[var(l)-1].this_cl, clp, &a, &b);
-#if 0
-		fprintf(stderr, "dl %zu:%u resolve2:", decisions.size(), decisions.back());
-		for (unsigned i=0; a+i<b; i++)
-			fprintf(stderr, " %ld[%u]", lit_to_dimacs(a[i]), vars[var(a[i])].trail_pos_plus1-1);
-		fprintf(stderr, "\n");
-#endif
-		v[1].push_back(lit2tp(lit2tp(a[0]) == ~l ? a[1] : a[0]));
-		for (a += 2; a < b; a++)
-			if (td(*a))
-				v[1].push_back(lit2tp(*a));
-			else
-				v[0].push_back(*a);
-#if 0
-		fprintf(stderr, "dl %zu:%u resolved to", decisions.size(), decisions.back());
-		for (int i=1; i>=0; i--) {
-			fprintf(stderr, " %zu:", v[i].size());
-			for (lit k : v[i])
-				fprintf(stderr, " %ld[%u]", lit_to_dimacs(i ? tp2lit(k) : k), vars[var(i ? tp2lit(k) : k)].trail_pos_plus1-1);
-		}
-		fprintf(stderr, "\n");
-#endif
-#if 0
-		if (!(m.n & 0x3ff)) {
-			fprintf(stderr, "%8lu %8zu %8zu        \r", m.n, v[1].size(), v[0].size());
-			fflush(stderr);
-		}
-#endif
-		m.tick();
-	}
-	sort(v[0].begin(), v[0].end(), gt); /* lits according to tp1 descending */
-	v[0].erase(unique(v[0].begin(), v[0].end()), v[0].end());
-	assert(v[1].size() == 1);
-	v[1].reserve(1+v[0].size());
-	v[1][0] = tp2lit(v[1][0]);
-	for (lit l : v[0])
-		v[1].push_back(l);
-	uint32_t max_tp1 = v[0].empty() ? 0 : tp1(v[0][0]);
-	for (dec=decisions.size(); dec>0; dec--)
-		if (max_tp1 > decisions[dec-1])
-			break;
-	return dec;
-}
-#endif
+
 template <bool use_merge_res>
-std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
+std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const
 {
+	const int32_t n0 = decisions.front();
 	const int32_t n = decisions.back();
 	auto tp = [this](lit l) -> int32_t { return vars[var(l)].trail_pos(); };
 
@@ -650,46 +549,54 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	for (; a<b; a++) {
 //		fprintf(stderr, "adding1 %u\n", tp(*a));
 		assert(value(*a) == false);
+		if (tp(*a) < n0)
+			continue;
 		if (tp(*a) > p)
 			p = tp(*a);
 		avail.set(tp(*a));
 	}
 	bool have_merged_lit = false;
-	std::pair<int32_t,int32_t> ret;
-	ret.first = -1;
+	std::array<res_info,2> ret;
 
-	auto assertion = [this](lit l){ assert(value(l) == false); return l; };
-
-	auto collect_lits = [this,n,assertion](int32_t p, vector<lit> &v, const bitset &av, bool is_merge_res){
+	auto collect_lits = [this,n,tp]
+	                    (int32_t p, vector<lit> &v, const bitset &av, bool is_merge_res)
+	{
 		assert(p >= n);
 		v.clear();
-		v.push_back(assertion(~units[p].implied_lit));
-		int32_t dec = 0, r = p;
+		v.push_back(~units[p].implied_lit);
+		int32_t r = p;
+		uint32_t ldec = decisions.size(); /* invariant: ldec > 0 && r >= decisions[ldec-1] */
+		res_info ret = { 0, 1 };
 		for (uint32_t i=1; (r = av.max_bit_lt(r)) >= 0; i++) {
 			assert(r < n || (i == 1 && is_merge_res));
+			bool new_lb = false;
+			for (; ldec>0 && (uint32_t)r < decisions[ldec-1]; ldec--)
+				new_lb = true;
+			assert(ldec);
+			ret.lbd += new_lb;
 			if (i == (is_merge_res ? 2 : 1))
-				for (dec=decisions.size(); dec>0; dec--)
-					if ((uint32_t)r >= decisions[dec-1])
-						break;
+				ret.dlvl = ldec;
 			//if (i >= (is_merge_res ? 2 : 1))
 			//	assert(p < n);
 			//else
 			//	assert(p >= n);
-			v.push_back(assertion(~units[r].implied_lit));
+			v.push_back(~units[r].implied_lit);
 		//	av.unset(r);
 		}
-		assert(dec >= 0);
-		return dec;
+	//	fprintf(stderr, "on dlvl %zu->%u learnt clause of size %zu and LBD %u\n",
+	//	        decisions.size(), ret.dlvl, v.size(), ret.lbd);
+		assert(ret.dlvl >= 0);
+		return ret;
 	};
 
 	while (1) {
 		assert(p >= n);
 		avail.unset(p);
 //		assert(avail.max_bit(p) == avail.max_bit_lt(p));
-		q = avail.max_bit_lt(p); /* TODO? use .max_bit(n,p) */
+		q = avail.max_bit(p); /* TODO? use .max_bit_in(n,p) */
 //		fprintf(stderr, "unset %u, next q: %d\n", p, q);
 		if (q < n) {
-			ret.second = collect_lits(p, v[1], avail, false);
+			ret[1] = collect_lits(p, v[1], avail, false);
 			return ret;
 		}
 		if (use_merge_res && have_merged_lit &&
@@ -699,7 +606,7 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 		    avail.bitcount(n,q) <= 2 - 2 /* -2: p and q on conflict level*/
 		#endif
 		) {
-			ret.first = collect_lits(p, v[0], avail, true);
+			ret[0] = collect_lits(p, v[0], avail, true);
 		}
 		deref(units[p].this_cl, tmp, &a, &b);
 		for (; a<b; a++) {
@@ -707,6 +614,8 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 				continue;
 //			fprintf(stderr, "adding2 %u\n", tp(*a));
 			assert(tp(*a) < p);
+			if (tp(*a) < n0)
+				continue;
 			if (tp(*a) > q)
 				q = tp(*a);
 			if (use_merge_res && tp(*a) >= n && !have_merged_lit)
@@ -718,17 +627,17 @@ std::pair<int32_t,int32_t> ksat::resolve_conflict2(const watch *w, std::vector<l
 	}
 }
 
-uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *stats) const
+ksat::res_info ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *stats) const
 {
-	std::pair<int32_t,int32_t> dec = {-1,-1};
+	std::array<res_info,2> res;
 	measurement m;
 	m.start();
 
 	//if ((nvars-decisions.front())/(unit_ptr+1-decisions.back()) > decisions.size())
 	if (0 && decisions.size() > 1)
-		dec = resolve_conflict2<true>(w, v, m);
+		res = resolve_conflict2<true>(w, v, m);
 	else
-		dec = resolve_conflict2<false>(w, v, m);
+		res = resolve_conflict2<false>(w, v, m);
 
 	m.stop();
 	stats->resolutions += m.n;
@@ -737,14 +646,14 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *s
 	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %d\n",
 	        decisions.size(), decisions.back(), m.t, m.n, v[1].size(), dec);
 #endif
-	if (0 && dec.first < 0) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
+	if (0 && res[0].dlvl < 0) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
 		v[0].resize(decisions.size());
 		for (uint32_t i=0; i<decisions.size(); i++)
 			v[0][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
-		dec.first = decisions.size()-1;
+		res[0].dlvl = decisions.size()-1;
 	}
 //	return std::min(dec.first, dec.second);
-	return dec.second;
+	return res[1];
 }
 
 void ksat::assign(const watch &w)
@@ -788,7 +697,8 @@ status ksat::run()
 				break;
 			}
 			/* analyze the conflict and determine clauses cl to learn */
-			uint32_t decision_level = analyze(w, cl, &stats);
+			res_info res = analyze(w, cl, &stats);
+			uint32_t decision_level = res.dlvl;
 			st.start();
 			/* check whether cl[0] subsumes cl[1] */
 			bool inc = 0 && cl[1].size() >= cl[0].size() &&
@@ -799,7 +709,7 @@ status ksat::run()
 			/* add learnt clauses to db */
 			//learn_clause(cl[0], &stats);
 			if (!inc)
-				learn_clause(cl[1], &stats);
+				learn_clause(cl[1], res.lbd, &stats);
 			/* check whether to restart */
 			if (stats.conflicts == next_restart) {
 				if (decision_level)
@@ -871,7 +781,7 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 	return true;
 }
 
-void ksat::learn_clause(vector<lit> &cl, struct statistics *stats)
+void ksat::learn_clause(vector<lit> &cl, uint32_t lbd, struct statistics *stats)
 {
 	unsigned j=0;
 	stats->learnt++;
@@ -927,7 +837,7 @@ void ksat::learn_clause(vector<lit> &cl, struct statistics *stats)
 		p.l[0] = cl[0] | CLAUSE_PROXY_BIN_MASK;
 		p.l[1] = cl[1] | CLAUSE_PROXY_BIN_MASK;
 	} else {
-		p.ptr = db.add(cl.size(), true);
+		p.ptr = db.add(cl.size(), lbd > 3);
 		memcpy(db[p.ptr].l, cl.data(), sizeof(lit)*cl.size());
 	}
 	watches[cl[0]].push_back({p,cl[1]});

@@ -8,6 +8,7 @@
 #include <cstdlib>	/* abs() */
 #include <cinttypes>	/* uint32_t */
 #include <vector>
+#include <array>
 
 #ifndef CACHE_LINE_SZ
 # define CACHE_LINE_SZ	64
@@ -508,7 +509,7 @@ struct bitset {
 			return i * word_bits() - (BSR(w)+1);
 		return i > 1 ? max_bit((i-2)*word_bits()) : -1;
 	}
-	int32_t max_bit(uint32_t a, uint32_t b)
+	int32_t max_bit_in(uint32_t a, uint32_t b)
 	{
 		uint32_t lo = a/word_bits();
 		uint32_t hi = (b+word_bits()-1)/word_bits();
@@ -634,9 +635,16 @@ class ksat {
 
 	void reg(lit a) const;
 	void dec_all() const;
-	int32_t resolve_conflict(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
+
+	struct res_info {
+		int32_t dlvl;
+		int32_t lbd;
+	};
+
 	template <bool>
-	std::pair<int32_t,int32_t> resolve_conflict2(const watch *w, std::vector<lit> (&v)[2], measurement &m) const;
+	std::array<res_info,2> resolve_conflict2(const watch *w,
+	                                         std::vector<lit> (&v)[2],
+	                                         measurement &m) const;
 	bool add_unit(lit l, const clause_proxy &p=clause_proxy{.ptr=CLAUSE_PTR_NULL});
 
 	void assign(const watch &w);
@@ -693,8 +701,8 @@ public:
 	lit next_decision() const;
 	void make_decision(lit l);
 	const watch * propagate_units(struct statistics *stats);
-	uint32_t analyze(const watch *w, std::vector<lit> (&v)[2], struct statistics *stats) const;
-	void learn_clause(std::vector<lit> &, struct statistics *stats);
+	res_info analyze(const watch *w, std::vector<lit> (&v)[2], struct statistics *stats) const;
+	void learn_clause(std::vector<lit> &, uint32_t lbd, struct statistics *stats);
 	void trackback(uint32_t dlevel);
 
 	void vacuum();
