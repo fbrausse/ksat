@@ -718,7 +718,7 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *s
 	m.start();
 
 	//if ((nvars-decisions.front())/(unit_ptr+1-decisions.back()) > decisions.size())
-	if (decisions.size() > 1)
+	if (0 && decisions.size() > 1)
 		dec = resolve_conflict2<true>(w, v, m);
 	else
 		dec = resolve_conflict2<false>(w, v, m);
@@ -730,13 +730,14 @@ uint32_t ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statistics *s
 	fprintf(stderr, "dl %zu:%u resolution done in %luus, %lu steps, resulted in clause of size %zu on dl %d\n",
 	        decisions.size(), decisions.back(), m.t, m.n, v[1].size(), dec);
 #endif
-	if (dec.first < 0) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
+	if (0 && dec.first < 0) { // cl.size() > decisions.size() || !vars[var(cl[most_recent_this_dl])].have()
 		v[0].resize(decisions.size());
 		for (uint32_t i=0; i<decisions.size(); i++)
 			v[0][decisions.size()-1-i] = ~units[decisions[i]].implied_lit;
 		dec.first = decisions.size()-1;
 	}
-	return std::min(dec.first, dec.second);
+//	return std::min(dec.first, dec.second);
+	return dec.second;
 }
 
 void ksat::assign(const watch &w)
@@ -783,13 +784,13 @@ status ksat::run()
 			uint32_t decision_level = analyze(w, cl, &stats);
 			st.start();
 			/* check whether cl[0] subsumes cl[1] */
-			bool inc = cl[1].size() >= cl[0].size() &&
+			bool inc = 0 && cl[1].size() >= cl[0].size() &&
 			           includes(cl[1].begin(), cl[1].end(), cl[0].begin(), cl[0].end(),
 			                    [this](lit a, lit b){ return -(int32_t)(vars[var(a)].trail_pos() - vars[var(b)].trail_pos()); });
 			/* reset assignments made */
 			trackback(decision_level);
 			/* add learnt clauses to db */
-			learn_clause(cl[0], &stats);
+			//learn_clause(cl[0], &stats);
 			if (!inc)
 				learn_clause(cl[1], &stats);
 			/* check whether to restart */
