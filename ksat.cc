@@ -889,40 +889,44 @@ void ksat::learn_clause(vector<lit> &cl, uint32_t lbd, struct statistics *stats)
 void ksat::add_clause(vector<lit> &c)
 {
 	sort(c.begin(), c.end());
-	unsigned n = c.size() != 0;
-	for (unsigned i=n; i<c.size(); i++) {
-		uint32_t k = c[n-1] ^ c[i];
-		if (!k)
-			continue; /* remove duplicate literal */
-		if (k == 1)
-			return; /* dismiss clause, always satisfied */
+	unsigned n = 0;
+	for (unsigned i=0; i<c.size(); i++) {
+		if (have(c[i]) && vars[var(c[i])].trail_pos() < (decisions.empty() ? units.size() : decisions.front())) {
+			if (value(c[i]) == true)
+				return;
+			if (value(c[i]) == false)
+				continue;
+		}
+		if (n > 0) {
+			uint32_t k = c[n-1] ^ c[i];
+			if (!k)
+				continue; /* remove duplicate literal */
+			if (k == 1)
+				return; /* dismiss clause, always satisfied */
+		}
 		c[n++] = c[i];
 	}
 	c.resize(n);
 	unsigned j=0;
 	bool sat = false;
-	for (unsigned i=0; !sat && j<2 && i<c.size(); i++)
+	for (unsigned i=0; !sat && i<c.size(); i++)
 		if (!have(c[i]))
 			swap(c[j++], c[i]);
 		else
 			sat |= value(c[i]);
+	for (lit l : c)
+		reg(l);
 	if (c.size() >= 2) {
 		clause_proxy p;
-		for (lit l : c)
-			reg(l);
 		if (c.size() == 2) {
 			p.l[0] = c[0] | CLAUSE_PROXY_BIN_MASK;
 			p.l[1] = c[1] | CLAUSE_PROXY_BIN_MASK;
 		} else {
-#if 0
-			unsigned w1 = rand() % n;
-			unsigned w2 = rand() % (n-1);
-			if (w2 >= w1)
-				w2++;
-			if (w1 > w2)
-				swap(w1, w2);
-			swap(c[0], c[w1]);
-			swap(c[1], c[w2]);
+#if 1
+			if (j > 2) {
+				swap(c[0], c[0+(rand() % (j  ))]);
+				swap(c[1], c[1+(rand() % (j-1))]);
+			}
 #endif
 			p.ptr = db.add(n, false);
 			memcpy(db[p.ptr].l, c.data(), n*sizeof(lit));
