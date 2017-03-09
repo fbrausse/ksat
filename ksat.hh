@@ -641,6 +641,7 @@ class ksat {
 	struct res_info {
 		int32_t dlvl;
 		int32_t lbd;
+		uint32_t deleted_lits;
 	};
 
 	template <bool>

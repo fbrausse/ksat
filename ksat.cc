@@ -79,6 +79,7 @@ struct statistics {
 	unsigned long learnt_lits = 0;
 	unsigned long last_out = 0;
 	unsigned long restarts = 0;
+	unsigned long deleted_lits = 0;
 	timer t;
 	const ksat &sat;
 	statistics(const ksat &sat) : sat(sat) { t.start(); }
@@ -550,7 +551,8 @@ bool ksat::marked(uint32_t tp) const
 		assert(vars[var(*a)].trail_pos_plus1);
 		assert(tq < tp);
 		assert(*a == ~units[tq].implied_lit);
-		if (!units[tq].this_cl || !(avail.get(tq) || marked(tq)))
+		if (!units[tq].this_cl /* decision */ ||
+		    !(avail.get(tq) || marked(tq)) /* neither directly nor indirectly implied */)
 			skip = false;
 	}
 	simp.set(2*tp+1);
@@ -597,11 +599,10 @@ std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector
 		res_info ret = { 0, 1 };
 		simp.clear();
 		simp.set(2*p+1);
-		unsigned skipped = 0;
 		for (uint32_t i=1; (r = av.max_bit_lt(r)) >= 0; i++) {
 			assert(r < n || (i == 1 && is_merge_res));
 			if (marked(r)) {
-				skipped++;
+				ret.deleted_lits++;
 				continue;
 			}
 			bool new_lb = false;
@@ -620,7 +621,7 @@ std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector
 		}
 		if (0)
 			fprintf(stderr, "on dlvl %zu->%u learnt clause of size %zu and LBD %u, skipped %u\n",
-				decisions.size(), ret.dlvl, v.size(), ret.lbd, skipped);
+				decisions.size(), ret.dlvl, v.size(), ret.lbd, ret.deleted_lits);
 		assert(ret.dlvl >= 0);
 		return ret;
 	};
@@ -689,6 +690,7 @@ ksat::res_info ksat::analyze(const watch *w, vector<lit> (&v)[2], struct statist
 		res[0].dlvl = decisions.size()-1;
 	}
 //	return std::min(dec.first, dec.second);
+	stats->deleted_lits += res[1].deleted_lits;
 	return res[1];
 }
 
