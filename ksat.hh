@@ -717,7 +717,7 @@ public:
 	 */
 
 	bool is_unsat() const { return unsat; }
-	status get_status() const { return unsat ? FALSE : next_decision() >= nvars ? TRUE : INDET; }
+	status get_status() const;
 	uint32_t num_vars() const { return nvars; }
 
 	//unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }

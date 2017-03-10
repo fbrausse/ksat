@@ -350,7 +350,7 @@ void ksat::reg(lit a) const
 		dec_all();
 		vsids[a] = 1U << 31;
 	}
-	if (lit_heap)
+	if (lit_heap && !have(a))
 		lit_heap->sift_up(lit_heap->idx(a));
 }
 
@@ -785,6 +785,14 @@ status ksat::run()
 	stats();
 	fprintf(stderr, "%s\n", r == TRUE ? "SAT" : r == FALSE ? "UNSAT" : "INDET");
 	return r;
+}
+
+status ksat::get_status() const
+{
+	uint32_t n = lit_heap ? lit_heap->valid : 0;
+	return unsat ? FALSE
+	     : next_decision() >= nvars ? TRUE
+	     : ((lit_heap ? lit_heap->restore(n) : (void)0), INDET);
 }
 
 bool ksat::add_unit(lit l, const clause_proxy &p)
