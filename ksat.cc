@@ -80,6 +80,7 @@ struct statistics {
 	unsigned long last_out = 0;
 	unsigned long restarts = 0;
 	unsigned long deleted_lits = 0;
+	unsigned long learnt_lbd2 = 0, learnt_lbd3 = 0;
 	timer t;
 	const ksat &sat;
 	statistics(const ksat &sat) : sat(sat) { t.start(); }
@@ -93,11 +94,11 @@ struct statistics {
 		double s = t.get()/1e6;
 		uint32_t fixed = sat.decisions.empty() ? sat.units.size() : sat.decisions.front();
 		fprintf(stderr,
-		        "time: %.1fs, vars: %u+%u, confl: %lu (%.1f/s), rst: %lu, learnt: %lu avg. lits: %.1f, "
-		        "decs: %lu (%.1f/s) %.1fs, dl: %zu, props: %lu (%.4g/s) %.1fs %.1fs, res: %lu (%.4g/s) %.1fs, tt: %.1fs, cl db: %u MiB\n",
+		        "t %.1fs, v %u+%u, cfl %lu (%.1f/s), rst %lu, learnt %lu avg.sz %.1f del %.1f%% lbd %lu %lu, "
+		        "decs %lu (%.1f/s) %.1fs, dl %zu, props %lu (%.4g/s) %.1fs %.1fs, res %lu (%.4g/s) %.1fs, tt %.1fs, cl db %u MiB\n",
 		        s, fixed, sat.nvars-fixed,
 		        conflicts, conflicts/s, restarts,
-		        learnt, 10*learnt_lits/(conflicts+1)*.1,
+		        learnt, 10*learnt_lits/(conflicts+1)*.1, 100.0*deleted_lits/(deleted_lits+learnt_lits), learnt_lbd2, learnt_lbd3,
 		        n_decisions, n_decisions/s, dt/1e6, sat.decisions.size(),
 		        propagations, propagations/(pt/1e6), pt/1e6, wft/1e6,
 		        resolutions, resolutions/(rt/1e6), rt/1e6,
@@ -161,13 +162,15 @@ struct bin_inv_heap {
 		paeh[v] = i;
 	}
 
-	void sift_up(uint32_t i)
+	void _sift_up(uint32_t i)
 	{
 		while (i && !le(heap[par(i)], heap[i])) {
 			swap(heap[par(i)], heap[i]);
 			i = par(i);
 		}
 	}
+
+	void sift_up(uint32_t i) { if (i < valid) _sift_up(i); }
 
 	void build()
 	{
@@ -610,7 +613,7 @@ std::array<ksat::res_info,2> ksat::resolve_conflict2(const watch *w, std::vector
 				new_lb = true;
 			assert(ldec);
 			ret.lbd += new_lb;
-			if (i == (is_merge_res ? 2 : 1))
+			if (v.size() == (is_merge_res ? 2 : 1))
 				ret.dlvl = ldec;
 			//if (i >= (is_merge_res ? 2 : 1))
 			//	assert(p < n);
@@ -737,6 +740,7 @@ status ksat::run()
 			/* analyze the conflict and determine clauses cl to learn */
 			res_info res = analyze(w, cl, &stats);
 			uint32_t decision_level = res.dlvl;
+			assert(res.lbd-1 <= decision_level);
 			st.start();
 			/* check whether cl[0] subsumes cl[1] */
 			bool inc = 0 && cl[1].size() >= cl[0].size() &&
@@ -832,6 +836,10 @@ void ksat::learn_clause(vector<lit> &cl, uint32_t lbd, struct statistics *stats)
 	unsigned j=0;
 	stats->learnt++;
 	stats->learnt_lits += cl.size();
+	if (lbd == 2)
+		stats->learnt_lbd2++;
+	else if (lbd == 3)
+		stats->learnt_lbd3++;
 #if 0
 	fprintf(stderr, "adding clause");
 	unsigned i;
