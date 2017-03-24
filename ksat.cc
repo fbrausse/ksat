@@ -1019,4 +1019,48 @@ void ksat::stats(int verbosity)
 	fprintf(stderr, "%zu units to be propagated, unsat: %d\n", units.size(), unsat);
 }
 
+void dump_dimacs(const ksat &solver, FILE *f, bool complete_clauses)
+{
+	unsigned long n = 0;
+	for (const auto &c : solver.clauses())
+		for (lit l : c) {
+			if (!complete_clauses && solver.get_assign(l) == TRUE)
+				break;
+			if (!complete_clauses && solver.get_assign(l) == FALSE)
+				continue;
+			n++;
+			break;
+		}
+	fprintf(f, "c unsat:%d\n", solver.is_unsat());
+	if (solver.is_unsat())
+		n++;
+	n += solver.units_size();
+	fprintf(f, "p cnf %u %lu\n", solver.num_vars(), n);
+	if (solver.is_unsat())
+		fprintf(f, "0\n");
+#if 1
+	fprintf(f, "c propagated units:\n");
+	for (auto it = solver.units_begin(); it != solver.units_end(); ++it)
+		fprintf(f, "%ld 0\n", lit_to_dimacs(it->implied_lit));
+#endif
+	fprintf(f, "c non-propagated clauses\n");
+	std::vector<lit> cl;
+	for (const auto &c : solver.clauses()) {
+		cl.clear();
+		for (lit l : c) {
+			if (!complete_clauses && solver.get_assign(l) == TRUE)
+				goto next;
+			if (!complete_clauses && solver.get_assign(l) == FALSE)
+				continue;
+			cl.push_back(l);
+		}
+		if (!cl.empty()) {
+			for (lit l : cl)
+				fprintf(f, "%ld ", lit_to_dimacs(l));
+			fprintf(f, "0\n");
+		}
+	next:;
+	}
+}
+
 }

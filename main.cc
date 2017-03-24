@@ -109,43 +109,6 @@ error_line:
 	return 0;
 }
 
-static void do_dump(const ksat &solver, FILE *f)
-{
-	unsigned long n = 0;
-	for (const auto &c : solver.clauses())
-		for (lit l : c) {
-			if (solver.get_assign(var(l)) & (1U << sign(l)))
-				break;
-			if (solver.get_assign(var(l)))
-				continue;
-			n++;
-			break;
-		}
-	fprintf(f, "c unsat:%d\n", solver.is_unsat());
-	fprintf(f, "p cnf %u %lu\n", solver.num_vars(), n + solver.units_size());
-#if 1
-	for (auto it = solver.units_begin(); it != solver.units_end(); ++it)
-		fprintf(f, "%ld 0\n", lit_to_dimacs(it->implied_lit));
-#endif
-	std::vector<lit> cl;
-	for (const auto &c : solver.clauses()) {
-		cl.clear();
-		for (lit l : c) {
-			if (solver.get_assign(var(l)) & (1U << sign(l)))
-				goto next;
-			if (solver.get_assign(var(l)))
-				continue;
-			cl.push_back(l);
-		}
-		if (!cl.empty()) {
-			for (lit l : cl)
-				fprintf(f, "%ld ", lit_to_dimacs(l));
-			fprintf(f, "0\n");
-		}
-	next:;
-	}
-}
-
 #define USAGE	"usage: %s [-OPTS] [INSTANCE.cnf]\n"
 
 int verbosity = 0;
@@ -153,27 +116,31 @@ int verbosity = 0;
 int main(int argc, char **argv)
 {
 	FILE *dump = NULL;
+	bool dump_complete = false;
 	ksat solver;
 	int opt;
 
-	while ((opt = getopt(argc, argv, ":d:hr:v")) != -1)
+	while ((opt = getopt(argc, argv, ":d:D:hr:v")) != -1)
 		switch (opt) {
 		case 'd':
+		case 'D':
 			if (!(dump = fopen(optarg, "w"))) {
 				perror(optarg);
 				exit(1);
 			}
+			dump_complete = opt == 'D';
 			break;
 		case 'h':
-			fprintf(stderr, USAGE, argv[0]); exit(1);
+			fprintf(stderr, USAGE, argv[0]);
 			fprintf(stderr, "\n\
 Options:\n\
-  -d FILE     dump (pre-)processed instance clauses to FILE\n\
-  -D FILE     dump decision variables used into FILE\n\
+  -d FILE     dump pre-processed instance clauses to FILE\n\
+  -D FILE     dump unprocessed instance clauses to FILE\n\
   -h          display this help message\n\
   -r SEED     initialize random seed by SEED\n\
   -v          increase verbosity\n\
 ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n");
+			exit(1);
 		case 'r': srand(atoi(optarg)); break;
 		case 'v': verbosity++; break;
 		case '?':
@@ -204,7 +171,7 @@ ksat written by Franz Brausse <brausse@informatik.uni-trier.de>, license: MIT\n"
 	if (verbosity > 0)
 		solver.stats(verbosity);
 	if (dump) {
-		do_dump(solver, dump);
+		dump_dimacs(solver, dump, dump_complete);
 		fclose(dump);
 	}
 	switch (r) {

@@ -722,6 +722,7 @@ public:
 
 	//unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
 	status get_assign(uint32_t v) const { return value(v); }
+	status get_assign(lit l) const { return value(l); }
 
 	/*
 	 * access clauses: iterators
@@ -769,6 +770,8 @@ static inline long lit_to_dimacs(lit l)
 	long v = (l.v >> 1) + 1;
 	return (l.v & 1) ? v : -v;
 }
+
+void dump_dimacs(const ksat &solver, FILE *f, bool complete_clauses = false);
 
 }
 
