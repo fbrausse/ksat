@@ -18,12 +18,15 @@
 
 namespace ksat_ns {
 
+template <typename T>
+static constexpr size_t vec_head_sz() { return sizeof(T*) + 2*sizeof(uint32_t); }
+
 template <typename T,size_t cache_line_sz = CACHE_LINE_SZ>
 class vec {
 
 //	static_assert(std::is_pod<T>::value, "T needs to be POD");
 
-	static const size_t head_sz = sizeof(T*) + 2*sizeof(uint32_t);
+	static const size_t head_sz = vec_head_sz<T>();
 	static_assert(head_sz % alignof(T) == 0, "T needs proper alignment");
 
 	T *body;
@@ -45,15 +48,23 @@ class vec {
 	}
 
 public:
+	typedef       T              value_type;
+	typedef       uint32_t       size_type;
+	typedef       value_type &   reference;
+	typedef const value_type &   const_reference;
+	typedef       value_type *   pointer;
+	typedef const value_type *   const_pointer;
+
 	template <typename V>
 	struct itr {
 		V &v;
-		uint32_t idx;
+		size_type idx;
 
-		itr(V &v, uint32_t idx) : v(v), idx(idx) {}
+		itr(V &v, size_type idx) : v(v), idx(idx) {}
 
 		itr & operator++()    { ++idx; return *this; }
 		itr   operator++(int) { itr cpy = *this; ++*this; return cpy; }
+		itr & operator+=(size_type n) { idx += n; return *this; }
 
 		const T & operator* () const { return v[idx]; }
 		const T * operator->() const { return &**this; }
@@ -68,12 +79,12 @@ public:
 		      T * operator->()       { return &**this; }
 	};
 
-	static constexpr uint32_t init_cap() { return sizeof(init)/sizeof(T); }
+	typedef       itr<const vec> const_iterator;
 
-	typedef itr<const vec> const_iterator;
+	static constexpr size_type init_cap() { return sizeof(init)/sizeof(T); }
 
 	vec() : body(nullptr), sz(0), cap(init_cap()) {}
-	explicit vec(size_t n) : vec()
+	explicit vec(size_type n) : vec()
 	{
 		reserve(n);
 		if (!std::is_pod<T>::value)
@@ -92,7 +103,7 @@ public:
 		if (std::is_pod<T>::value)
 			memcpy(init, o.init, sizeof(init));
 		else
-			for (uint32_t i=0; i<std::min(sz,init_cap()); i++)
+			for (size_type i=0; i<std::min(sz,init_cap()); i++)
 				new (at(i)) T(std::move(o[i]));
 		o.body = nullptr;
 		o.sz = 0;
@@ -101,7 +112,7 @@ public:
 
 	vec & operator=(vec) = delete;
 
-	void reserve(size_t n)
+	void reserve(size_type n)
 	{
 		if (n <= init_cap())
 			return;
@@ -110,18 +121,27 @@ public:
 		else {
 			T *tmp = (T *)malloc(((cap = n) - init_cap()) * sizeof(T));
 			std::swap(tmp, body);
-			for (uint32_t i=init_cap(); i<sz; i++)
+			for (size_type i=init_cap(); i<sz; i++)
 				new (at(i)) T(std::move(tmp[i-init_cap()]));
 			free(tmp);
 		}
 	}
 
-	T & operator[](uint32_t idx)
+	void resize(size_type n)
+	{
+		reserve(std::max(n, 2*(sz+1)));
+		if (!std::is_pod<T>::value)
+			for (size_type i=sz; i<n; i++)
+				new (at(i)) T();
+		sz = n;
+	}
+
+	T & operator[](size_type idx)
 	{
 		return *at(idx);
 	}
 
-	const T & operator[](uint32_t idx) const
+	const T & operator[](size_type idx) const
 	{
 		return *at(idx);
 	}
@@ -137,8 +157,8 @@ public:
 	const_iterator cend()   const { return const_iterator(*this, sz); }
 
 	bool empty() const { return !sz; }
-	uint32_t size() const { return sz; }
-	uint32_t capacity() const { return cap; }
+	size_type size() const { return sz; }
+	size_type capacity() const { return cap; }
 
 	void push_back(const T &t)
 	{
@@ -166,6 +186,8 @@ public:
 				pop_back();
 	}
 };
+
+template <typename T> using nc_vec = vec<T,vec_head_sz<T>()>;
 
 template <typename V, typename I1, typename I2>
 struct concat_itr {
@@ -596,26 +618,26 @@ class ksat {
 	static_assert(sizeof(var_desc) == sizeof(uint32_t), "struct var_desc broken");
 
 	struct vsids_le {
-		const uint32_t *keys;
+		const std::vector<uint32_t> &keys;
 		bool operator()(uint32_t a, uint32_t b) const { return keys[a] >= keys[b]; }
 	};
 
 	clause_db db;
 
-	var_desc *vars;
+	nc_vec<var_desc> vars;
 //	assignments assigns;     // assignment per variable
-	vec<watch> *watches;     // watch lists
+	nc_vec<vec<watch>> watches;     // watch lists
 	std::vector<watch> units;  // trail, including reasons (if implied)
 	std::vector<uint32_t> decisions; // indices of trail which start a new decision level
 	uint32_t unit_ptr = 0;   // current position in trail
 
 	uint32_t nvars;          // constant number of instance variables
 
-	std::vector<uint32_t> lit_heap_valid;
+	nc_vec<uint32_t> lit_heap_valid;
 	bin_inv_heap<vsids_le> *lit_heap = nullptr;
-	uint32_t *active;
-	uint32_t n_active;
-	uint32_t *vsids;
+	nc_vec<uint32_t> active;
+	uint32_t n_active = 0;
+	mutable std::vector<uint32_t> vsids;
 
 	mutable bitset avail, simp;
 

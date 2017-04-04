@@ -111,21 +111,26 @@ template <typename Le>
 struct bin_inv_heap {
 
 	const Le le;
-	uint32_t *paeh; /* mapping var -> heap index */
-	uint32_t *heap; /* mapping heap index -> var */
-	uint32_t n, valid;
+	std::vector<uint32_t> paeh; /* mapping var -> heap index */
+	std::vector<uint32_t> heap; /* mapping heap index -> var */
+	uint32_t valid;
 
 	explicit bin_inv_heap(Le le, uint32_t n)
-	: le(le), paeh(new uint32_t[n]), heap(new uint32_t[n]), n(n), valid(n)
+	: le(le), paeh(n), heap(n), valid(n)
 	{
 		for (uint32_t i=0; i<n; i++)
 			heap[i] = paeh[i] = i;
 	}
 
-	~bin_inv_heap()
+	void add(uint32_t v)
 	{
-		delete[] paeh;
-		delete[] heap;
+		assert(v == paeh.size());
+		auto it = heap.begin() + valid;
+		heap.insert(it, v);
+		while (++it != heap.end())
+			paeh[*it]++;
+		paeh.push_back(valid);
+		valid++;
 	}
 
 	void swap(uint32_t &va, uint32_t &vb)
@@ -237,29 +242,41 @@ ksat::clause_itr ksat::cl_ref::end() const
 ksat::~ksat()
 {
 	delete lit_heap;
-	delete[] vsids;
-	delete[] watches;
-	delete[] vars;
 }
 
 void ksat::init(uint32_t nvars)
 {
 	this->nvars = nvars;
-	vars    = new var_desc[nvars];
-	watches = new vec<watch>[2*nvars];
+	vars.resize(nvars);
+	watches.resize(2*nvars);
 	//assigns.init(nvars);
 	units.reserve(nvars);
-	vsids = new uint32_t[2*nvars];
-	memset(vsids, 0, sizeof(*vsids)*2*nvars);
+	vsids.resize(2*nvars);
+	memset(vsids.data(), 0, sizeof(*vsids.data())*2*nvars);
 	lit_heap = new bin_inv_heap<vsids_le>({vsids}, 2*nvars);
 #if 1
-	active = new uint32_t[nvars];
+	active.resize(nvars);
 	for (uint32_t v=0; v<nvars; v++)
 		active[v] = v;
 	n_active = nvars;
 #endif
 	avail.reserve(nvars);
 	simp.resize(2*nvars);
+}
+
+uint32_t ksat::add_var()
+{
+	uint32_t r = nvars++;
+	vars.resize(nvars);
+	watches.resize(2*nvars);
+	units.reserve(nvars);
+	vsids.resize(2*nvars);
+	lit_heap->add(r);
+	active.resize(nvars);
+	active[n_active++] = nvars-1;
+	avail.reserve(nvars);
+	simp.resize(2*nvars);
+	return r;
 }
 
 void ksat::vacuum()
@@ -834,17 +851,19 @@ bool ksat::add_unit(lit l, const clause_proxy &p)
 void ksat::learn_clause(vector<lit> &cl, uint32_t lbd, struct statistics *stats)
 {
 	unsigned j=0;
-	stats->learnt++;
-	stats->learnt_lits += cl.size();
-	if (lbd == 2)
-		stats->learnt_lbd2++;
-	else if (lbd == 3)
-		stats->learnt_lbd3++;
+	if (stats) {
+		stats->learnt++;
+		stats->learnt_lits += cl.size();
+		if (lbd == 2)
+			stats->learnt_lbd2++;
+		else if (lbd == 3)
+			stats->learnt_lbd3++;
+	}
 #if 0
 	fprintf(stderr, "adding clause");
 	unsigned i;
 	for (i=0; i<std::min((uint32_t)cl.size(), 5U); i++)
-		fprintf(stderr, " %ld[%d]", lit_to_dimacs(cl[i]), vars[var(cl[i])].trail_pos_plus1-1);
+		fprintf(stderr, " %ld[%d]", lit_to_dimacs(cl[i]), vars[var(cl[i])].trail_pos());
 	if (i < cl.size())
 		fprintf(stderr, " ...");
 	fprintf(stderr, "\n");
@@ -965,7 +984,7 @@ void ksat::add_clause(vector<lit> &c)
 void ksat::stats(int verbosity)
 {
 	fprintf(stderr, "vars: %lu MiB\n",
-	        (sizeof(*vars) * nvars) >> 20);
+	        (sizeof(var_desc) * nvars) >> 20);
 #if 0
 	if (verbosity > 1) {
 		std::vector<uint32_t> vcause;
@@ -983,7 +1002,7 @@ void ksat::stats(int verbosity)
 	}
 #endif
 	fprintf(stderr, "watches (each cached: %u): %lu MiB\n",
-	        watches[0].init_cap(), (sizeof(*watches) * nvars*2) >> 20);
+	        watches[0].init_cap(), (sizeof(vec<watch>) * nvars*2) >> 20);
 	if (verbosity > 1) {
 		std::vector<size_t> wfilled;
 		for (uint32_t v=0; v<2*nvars; v++) {
