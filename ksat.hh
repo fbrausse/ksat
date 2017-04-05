@@ -728,6 +728,8 @@ public:
 	const watch * propagate_units(struct statistics *stats);
 	res_info analyze(const watch *w, std::vector<lit> (&v)[2], struct statistics *stats) const;
 	void learn_clause(std::vector<lit> &, uint32_t lbd, struct statistics *stats);
+
+	/* requires: decisions.size() > dlevel */
 	void trackback(uint32_t dlevel);
 
 	void vacuum();
@@ -745,6 +747,8 @@ public:
 	//unsigned get_assign(uint32_t v) const { return vars[v].have() ? 1U << vars[v].value : 0; }
 	status get_assign(uint32_t v) const { return value(v); }
 	status get_assign(lit l) const { return value(l); }
+
+	const std::vector<uint32_t> & get_decisions() const { return decisions; }
 
 	/*
 	 * access clauses: iterators

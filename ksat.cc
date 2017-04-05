@@ -949,6 +949,7 @@ void ksat::add_clause(vector<lit> &c)
 			swap(c[j++], c[i]);
 		else
 			sat |= value(c[i]);
+	assert(!sat);
 	for (lit l : c)
 		reg(l);
 	if (c.size() >= 2) {
