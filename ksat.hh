@@ -9,6 +9,7 @@
 #include <cinttypes>	/* uint32_t */
 #include <vector>
 #include <array>
+#include <memory>	/* std::unique_ptr */
 
 #ifndef CACHE_LINE_SZ
 # define CACHE_LINE_SZ	64
@@ -596,9 +597,12 @@ static constexpr bool operator!=(bool a, status b) { return   b != a ; }
 #endif
 static constexpr bool valid(status a) { return !(a & INDET); }
 
+class run_context;
+
 class ksat {
 
 	friend struct statistics;
+	friend class run_context;
 
 	struct var_desc {
 		status value : 2;
@@ -783,6 +787,40 @@ public:
 	 * stats
 	 */
 	void stats(int verbosity);
+};
+
+class run_context {
+	std::vector<lit> cl[2];
+	std::unique_ptr<statistics> stats_ptr;
+	bool do_vacuum = true;
+	status r;
+	luby_seq luby;
+	unsigned long next_restart;
+	unsigned long last_vacuum;
+	timer st;
+	ksat &s;
+
+	status done(status result);
+
+public:
+	explicit run_context(ksat &s);
+	~run_context();
+
+	/* these are supposed to be called in a loop akin
+	 *
+	 *   while ((r = ctx.propagate()) != FALSE) {
+	 *     if ((r = ctx.decide()) != TRUE)
+	 *       continue;
+	 *     // analyze the solution...
+	 *     ctx.trackback(0);               // optional
+	 *     ctx.add_clause(learned_clause); // optional
+	 *   }
+	 */
+
+	status propagate();
+	status decide();
+	void trackback(uint32_t dlevel);
+	void add_clause(std::vector<lit> &c);
 };
 
 static inline lit dimacs_to_lit(long v)

@@ -728,6 +728,123 @@ void ksat::make_decision(lit d)
 	assign({clause_proxy{.ptr=CLAUSE_PTR_NULL},d});
 }
 
+run_context::run_context(ksat &s)
+: stats_ptr(std::make_unique<statistics>(s))
+, r(s.unsat ? FALSE : INDET)
+, luby(1 << 6)
+, next_restart(luby())
+, last_vacuum(0)
+, s(s)
+{}
+
+run_context::~run_context() = default;
+
+status run_context::done(status result)
+{
+	statistics &stats = *stats_ptr;
+	r = result;
+	stats();
+	fprintf(stderr, "%s\n", r == TRUE ? "SAT" : r == FALSE ? "UNSAT" : "INDET");
+	return r;
+}
+
+status run_context::propagate()
+{
+	if (r != INDET)
+		return r;
+
+	statistics &stats = *stats_ptr;
+
+	/* output statistics approx. every second */
+	if (stats.t.get()-stats.last_out > 1000000)
+		stats();
+
+	/* propagate everything from unit_ptr to units.size() and check
+	 * for a conflict w */
+	while (const watch *w = s.propagate_units(&stats)) {
+		++stats.conflicts;
+		if (s.decisions.empty()) {
+			/* conflict w/o decisions */
+			s.unsat = true;
+			return done(FALSE);
+		}
+		/* analyze the conflict and determine clauses cl to learn */
+		ksat::res_info res = s.analyze(w, cl, &stats);
+		uint32_t decision_level = res.dlvl;
+		assert(res.lbd-1 <= decision_level);
+		st.start();
+		/* check whether cl[0] subsumes cl[1] */
+		bool inc = 0 && cl[1].size() >= cl[0].size() &&
+		           includes(cl[1].begin(), cl[1].end(), cl[0].begin(), cl[0].end(),
+		                    [this](lit a, lit b){ return -(int32_t)(s.vars[var(a)].trail_pos() - s.vars[var(b)].trail_pos()); });
+		/* reset assignments made */
+		s.trackback(decision_level);
+		/* add learnt clauses to db */
+		//learn_clause(cl[0], &stats);
+		if (!inc)
+			s.learn_clause(cl[1], res.lbd, &stats);
+		/* check whether to restart */
+		if (stats.conflicts == next_restart) {
+			if (decision_level)
+				s.trackback(0);
+			do_vacuum = s.units.size() > last_vacuum;
+			stats.restarts++;
+			next_restart += (++luby)();
+			s.dec_all(); /* decrease VSIDS values */
+		}
+		stats.tt += st.get();
+		/* try propagation again with new clauses attached */
+	}
+
+	return r;
+}
+
+status run_context::decide()
+{
+	assert(r == INDET);
+	statistics &stats = *stats_ptr;
+
+	/* clean up clause db if necessary */
+	if (do_vacuum) {
+		assert(s.decisions.empty());
+		s.vacuum();
+		do_vacuum = false;
+		last_vacuum = s.units.size();
+	}
+	/* make a new decision */
+	st.start();
+	if (s.lit_heap)
+		s.lit_heap_valid.push_back(s.lit_heap->valid);
+	lit d = s.next_decision(); /* via VSIDS */
+	stats.dt += st.get();
+	if (var(d) >= s.nvars) {
+		/* no decision possible, all variables assigned */
+		return done(TRUE);
+	}
+	stats.n_decisions++;
+	s.make_decision(d);
+
+	return r;
+}
+
+void run_context::trackback(uint32_t dlevel)
+{
+	if (dlevel < s.decisions.size()) {
+		s.trackback(dlevel);
+		r = INDET;
+		s.unsat = false;
+	}
+}
+
+void run_context::add_clause(vector<lit> &c)
+{
+	if (r == TRUE)
+		r = INDET;
+	s.add_clause(c);
+	if (s.unsat)
+		r = FALSE;
+}
+
 status ksat::run()
 {
 	vector<lit> cl[2];
