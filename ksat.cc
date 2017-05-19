@@ -126,7 +126,7 @@ struct bin_inv_heap {
 	{
 		assert(v == paeh.size());
 		auto it = heap.begin() + valid;
-		heap.insert(it, v);
+		it = heap.insert(it, v);
 		while (++it != heap.end())
 			paeh[*it]++;
 		paeh.push_back(valid);
@@ -271,7 +271,8 @@ uint32_t ksat::add_var()
 	watches.resize(2*nvars);
 	units.reserve(nvars);
 	vsids.resize(2*nvars);
-	lit_heap->add(r);
+	lit_heap->add({r<<1|0});
+	lit_heap->add({r<<1|1});
 	active.resize(nvars);
 	active[n_active++] = nvars-1;
 	avail.reserve(nvars);
@@ -843,6 +844,13 @@ void run_context::add_clause(vector<lit> &c)
 	s.add_clause(c);
 	if (s.unsat)
 		r = FALSE;
+}
+
+uint32_t run_context::add_var()
+{
+	if (r == TRUE)
+		r = INDET;
+	return s.add_var();
 }
 
 status ksat::run()

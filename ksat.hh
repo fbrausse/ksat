@@ -821,6 +821,7 @@ public:
 	status decide();
 	void trackback(uint32_t dlevel);
 	void add_clause(std::vector<lit> &c);
+	uint32_t add_var();
 };
 
 static inline lit dimacs_to_lit(long v)
