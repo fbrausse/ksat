@@ -1,3 +1,11 @@
+/*
+ * ksat.cc
+ *
+ * Copyright 2017 Franz Brauße <brausse@informatik.uni-trier.de>
+ *
+ * This file is part of ksat.
+ * See the LICENSE file for terms of distribution.
+ */
 
 #include <cassert>
 #include <algorithm>	/* std::sort */
