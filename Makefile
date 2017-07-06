@@ -5,7 +5,7 @@ CXXFLAGS = -O2 -Wall -g
 LDFLAGS = -g
 override CXX += -std=c++14
 
-LIBOBJS = ksat.o
+LIB_OBJS = ksat.o
 OBJS = main.o $(LIB_OBJS)
 
 ksat: override CC=$(CXX)
