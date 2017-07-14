@@ -17,7 +17,7 @@ libksat.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
 install: ksat libksat.a
-	mkdir -p $(DESTDIR)/include/ksat && $(INSTALL) -m 0644 ksat.hh $(DESTDIR)/include/ksat
+	mkdir -p $(DESTDIR)/include/ksat && $(INSTALL) -m 0644 common.h ksat.hh $(DESTDIR)/include/ksat
 	mkdir -p $(DESTDIR)/lib && $(INSTALL) -m 0644 libksat.a $(DESTDIR)/lib
 	mkdir -p $(DESTDIR)/bin && $(INSTALL) -m 0755 ksat $(DESTDIR)/bin
 
