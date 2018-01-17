@@ -19,6 +19,8 @@
 #include <array>
 #include <memory>	/* std::unique_ptr */
 
+#define KSAT_VERSION_STR	"0.1"
+
 #ifndef CACHE_LINE_SZ
 # define CACHE_LINE_SZ	64
 #endif
@@ -845,6 +847,33 @@ static inline long lit_to_dimacs(lit l)
 }
 
 void dump_dimacs(const ksat &solver, FILE *f, bool complete_clauses = false);
+
+/****************************************************************************
+ * ipasir API support
+ *
+ * TODO:
+ * - failed() not implemented
+ **************************************************************************** */
+
+class ipasir : ksat, run_context {
+
+	std::vector<lit>   clause_to_add;
+	int              (*terminate)(void *state);
+	void              *terminate_state;
+	std::vector<lit>   assumptions;
+
+public:
+	ipasir();
+
+	static const char * signature();
+
+	int  solve        ();
+	int  val          (int lit) const;
+//	int  failed       (int lit) const;
+	void assume       (int lit);
+	void add          (int lit_or_zero);
+	void set_terminate(void *state, int (*terminate)(void *state));
+};
 
 }
 

@@ -1216,4 +1216,113 @@ void dump_dimacs(const ksat &solver, FILE *f, bool complete_clauses)
 	}
 }
 
+/****************************************************************************
+ * ipasir API support
+ **************************************************************************** */
+
+template <typename T>
+static T status_sel(status s, T if_false, T if_true, T if_indet)
+{
+	switch (s) {
+	case FALSE: return if_false;
+	case TRUE : return if_true;
+	case INDET: break;
+	}
+	return if_indet;
+}
+
+ipasir::ipasir()
+: run_context(static_cast<ksat &>(*this))
+, terminate(nullptr)
+, n_assumptions(0)
+{}
+
+const char * ipasir::signature() { return "ksat-" KSAT_VERSION_STR; }
+
+int ipasir::solve()
+{
+	run_context::trackback(0);
+	for (lit l : assumptions)
+		ksat::make_decision(l);
+	status r;
+	while ((r = run_context::propagate()) != FALSE &&
+	       (!terminate || !terminate(terminate_state)) &&
+	       (r = run_context::decide()) != TRUE)
+		;
+	return status_sel(r, 20, 10, 0);
+}
+
+int ipasir::val(int lit) const
+{
+	return status_sel(ksat::get_assign(dimacs_to_lit(lit)), -lit, lit, 0);
+}
+
+/* TODO: int ipasir::failed(int lit) const */
+
+void ipasir::assume(int lit)
+{
+	assumptions.push_back(dimacs_to_lit(lit));
+}
+
+void ipasir::add(int lit_or_zero)
+{
+	if (lit_or_zero) {
+		lit l = dimacs_to_lit(lit_or_zero);
+		while (ksat::num_vars() <= var(l))
+			(void)ksat::add_var();
+		clause_to_add.push_back(l);
+	} else {
+		ksat::add_clause(clause_to_add);
+		clause_to_add.clear();
+	}
+}
+
+void ipasir::set_terminate(void *state, int (*terminate)(void *state))
+{
+	terminate_state = state;
+	ipasir::terminate = terminate;
+}
+}
+
+extern "C" const char * ksat_ipasir_signature()
+{
+	return ksat_ns::ipasir::signature();
+}
+
+extern "C" void * ksat_ipasir_init()
+{
+	return static_cast<void *>(new ksat_ns::ipasir);
+}
+
+extern "C" void ksat_ipasir_release(void *solver)
+{
+	delete static_cast<ksat_ns::ipasir *>(solver);
+}
+
+extern "C" void ksat_ipasir_add(void *solver, int lit_or_zero)
+{
+	static_cast<ksat_ns::ipasir *>(solver)->add(lit_or_zero);
+}
+
+extern "C" void ksat_ipasir_assume(void *solver, int lit)
+{
+	static_cast<ksat_ns::ipasir *>(solver)->assume(lit);
+}
+
+extern "C" int ksat_ipasir_solve(void *solver)
+{
+	return static_cast<ksat_ns::ipasir *>(solver)->solve();
+}
+
+extern "C" int ksat_ipasir_val(void *solver, int lit)
+{
+	return static_cast<ksat_ns::ipasir *>(solver)->val(lit);
+}
+
+extern "C" int ksat_ipasir_failed(void *solver, int lit);
+
+extern "C" void ksat_ipasir_set_terminate(void *solver, void *state,
+                                          int (*terminate)(void *state))
+{
+	static_cast<ksat_ns::ipasir *>(solver)->set_terminate(state, terminate);
 }

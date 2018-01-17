@@ -17,12 +17,12 @@ libksat.a: $(LIB_OBJS)
 	$(AR) rcs $@ $^
 
 install: ksat libksat.a
-	mkdir -p $(DESTDIR)/include/ksat && $(INSTALL) -m 0644 common.h ksat.hh $(DESTDIR)/include/ksat
+	mkdir -p $(DESTDIR)/include/ksat && $(INSTALL) -m 0644 common.h ksat.hh ksat-ipasir.h $(DESTDIR)/include/ksat
 	mkdir -p $(DESTDIR)/lib && $(INSTALL) -m 0644 libksat.a $(DESTDIR)/lib
 	mkdir -p $(DESTDIR)/bin && $(INSTALL) -m 0755 ksat $(DESTDIR)/bin
 
 uninstall:
-	$(RM) $(DESTDIR)/include/ksat/ksat.hh
+	$(RM) $(DESTDIR)/include/ksat/ksat.hh $(DESTDIR)/include/ksat/ksat-ipasir.h $(DESTDIR)/include/ksat/common.h
 	$(RM) $(DESTDIR)/lib/libksat.a
 	$(RM) $(DESTDIR)/bin/ksat
 
