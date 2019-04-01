@@ -828,6 +828,8 @@ status run_context::decide()
 	stats.dt += st.get();
 	if (var(d) >= s.nvars) {
 		/* no decision possible, all variables assigned */
+		if (s.lit_heap) /* lit_heap->valid added above invalid */
+			s.lit_heap_valid.pop_back();
 		return done(TRUE);
 	}
 	stats.n_decisions++;
@@ -930,6 +932,8 @@ status ksat::run()
 		stats.dt += st.get();
 		if (var(d) >= nvars) {
 			/* no decision possible, all variables assigned */
+			if (lit_heap) /* lit_heap->valid added above invalid */
+				lit_heap_valid.pop_back();
 			r = TRUE;
 			break;
 		}
