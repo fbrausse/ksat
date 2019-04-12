@@ -370,7 +370,7 @@ void ksat::vacuum()
 			active[v--] = active[--n_active];
 	}
 	m.stop();
-	fprintf(stderr, "vacuum del %u watches, %u large-cl lits (%lu steps in %luus -> %g/s)\n", del_w, del_db, m.n, m.t, m.n/(m.t/1e6));
+//	fprintf(stderr, "vacuum del %u watches, %u large-cl lits (%lu steps in %luus -> %g/s)\n", del_w, del_db, m.n, m.t, m.n/(m.t/1e6));
 }
 
 void ksat::reg(lit a) const
@@ -748,13 +748,14 @@ run_context::run_context(ksat &s)
 
 run_context::~run_context() = default;
 
-status run_context::done(status result)
+void run_context::stats(int verbosity) const
 {
-	statistics &stats = *stats_ptr;
-	r = result;
-	stats();
-	fprintf(stderr, "%s\n", r == TRUE ? "SAT" : r == FALSE ? "UNSAT" : "INDET");
-	return r;
+	if (verbosity > 0) {
+		statistics &stats = *stats_ptr;
+		stats();
+	}
+	if (verbosity > 1)
+		s.stats(verbosity-1);
 }
 
 status run_context::propagate()
@@ -775,7 +776,7 @@ status run_context::propagate()
 		if (s.decisions.empty()) {
 			/* conflict w/o decisions */
 			s.unsat = true;
-			return done(FALSE);
+			return r = FALSE;
 		}
 		/* analyze the conflict and determine clauses cl to learn */
 		ksat::res_info res = s.analyze(w, cl, &stats);
@@ -830,7 +831,7 @@ status run_context::decide()
 		/* no decision possible, all variables assigned */
 		if (s.lit_heap) /* lit_heap->valid added above invalid */
 			s.lit_heap_valid.pop_back();
-		return done(TRUE);
+		return r = TRUE;
 	}
 	stats.n_decisions++;
 	s.make_decision(d);

@@ -808,8 +808,6 @@ class run_context {
 	timer st;
 	ksat &s;
 
-	status done(status result);
-
 public:
 	explicit run_context(ksat &s);
 	~run_context();
@@ -830,6 +828,8 @@ public:
 	void trackback(uint32_t dlevel);
 	void add_clause(std::vector<lit> &c);
 	uint32_t add_var();
+
+	void stats(int verbosity) const;
 };
 
 static inline lit dimacs_to_lit(long v)
